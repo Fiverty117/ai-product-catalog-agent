@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Frontend
+node_modules/
+dist/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated/private assets
+storage/originals/*
+storage/processed/*
+storage/catalogs/*
+!storage/originals/.gitkeep
+!storage/processed/.gitkeep
+!storage/catalogs/.gitkeep
+
+# Local outputs
+coverage.xml
+htmlcov/
