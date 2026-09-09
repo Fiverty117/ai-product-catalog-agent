@@ -18,6 +18,7 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "prices",
         "products",
         "skus",
+        "sku_field_provenance",
     }
     engine.dispose()
 

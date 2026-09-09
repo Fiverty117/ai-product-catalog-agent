@@ -2,12 +2,23 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, CheckConstraint, Enum, ForeignKey, Index, Numeric, String, Uuid
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Enum,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.types import UTCDateTime, utc_now
-from app.domain.enums import PhotoRole
+from app.domain.enums import FieldSource, FieldState, PhotoRole, SKUFieldName
 
 
 class Brand(Base):
@@ -76,6 +87,73 @@ class SKU(Base):
     product: Mapped[Product] = relationship(back_populates="skus")
     photos: Mapped[list["Photo"]] = relationship(back_populates="sku")
     prices: Mapped[list["Price"]] = relationship(back_populates="sku")
+    field_provenance: Mapped[list["SKUFieldProvenance"]] = relationship(
+        back_populates="sku"
+    )
+
+
+class SKUFieldProvenance(Base):
+    __tablename__ = "sku_field_provenance"
+    __table_args__ = (
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_sku_field_provenance_confidence_range",
+        ),
+        UniqueConstraint(
+            "sku_id",
+            "field_name",
+            name="uq_sku_field_provenance_sku_field",
+        ),
+        Index("ix_sku_field_provenance_sku_id", "sku_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    sku_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("skus.id"), nullable=False
+    )
+    field_name: Mapped[SKUFieldName] = mapped_column(
+        Enum(
+            SKUFieldName,
+            name="sku_field_name",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    source: Mapped[FieldSource] = mapped_column(
+        Enum(
+            FieldSource,
+            name="field_source",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(7, 6))
+    evidence: Mapped[str | None] = mapped_column(Text)
+    state: Mapped[FieldState] = mapped_column(
+        Enum(
+            FieldState,
+            name="field_state",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    sku: Mapped[SKU] = relationship(back_populates="field_provenance")
 
 
 class Photo(Base):

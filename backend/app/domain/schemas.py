@@ -5,7 +5,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-from app.domain.enums import PhotoRole
+from app.domain.enums import FieldSource, FieldState, PhotoRole, SKUFieldName
 
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -77,6 +77,31 @@ class SKURead(ReadSchema):
     size_value: Decimal | None
     size_unit: str | None
     servings: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SKUFieldProvenanceCreate(BaseModel):
+    sku_id: uuid.UUID
+    field_name: SKUFieldName
+    source: FieldSource
+    confidence: Decimal | None = Field(
+        default=None, ge=0, le=1, max_digits=7, decimal_places=6
+    )
+    evidence: str | None = None
+    state: FieldState
+    locked: bool = False
+
+
+class SKUFieldProvenanceRead(ReadSchema):
+    id: uuid.UUID
+    sku_id: uuid.UUID
+    field_name: SKUFieldName
+    source: FieldSource
+    confidence: Decimal | None
+    evidence: str | None
+    state: FieldState
+    locked: bool
     created_at: datetime
     updated_at: datetime
 
