@@ -1,0 +1,131 @@
+import uuid
+from datetime import datetime
+from decimal import Decimal
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+from app.domain.enums import PhotoRole
+
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{64}$")]
+CurrencyCode = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=3,
+        max_length=3,
+        pattern=r"^[A-Za-z]{3}$",
+    ),
+]
+
+
+class ReadSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BrandCreate(BaseModel):
+    name: NonEmptyText
+
+
+class BrandRead(ReadSchema):
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProductCreate(BaseModel):
+    brand_id: uuid.UUID
+    name: NonEmptyText
+
+
+class ProductRead(ReadSchema):
+    id: uuid.UUID
+    brand_id: uuid.UUID
+    name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SKUCreate(BaseModel):
+    product_id: uuid.UUID
+    external_sku: NonEmptyText | None = None
+    flavor: NonEmptyText | None = None
+    size_value: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=6)
+    size_unit: NonEmptyText | None = None
+    servings: int | None = Field(default=None, gt=0)
+
+    @field_validator("size_unit")
+    @classmethod
+    def require_size_value_with_unit(cls, value: str | None, info):
+        if value is not None and info.data.get("size_value") is None:
+            raise ValueError("size_unit requires size_value")
+        return value
+
+    def model_post_init(self, __context: object) -> None:
+        if self.size_value is not None and self.size_unit is None:
+            raise ValueError("size_value requires size_unit")
+
+
+class SKURead(ReadSchema):
+    id: uuid.UUID
+    product_id: uuid.UUID
+    external_sku: str | None
+    flavor: str | None
+    size_value: Decimal | None
+    size_unit: str | None
+    servings: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PhotoCreate(BaseModel):
+    sku_id: uuid.UUID
+    file_path: NonEmptyText
+    checksum_sha256: Sha256
+    role: PhotoRole = PhotoRole.OTHER
+    is_original: bool
+
+
+class PhotoRead(ReadSchema):
+    id: uuid.UUID
+    sku_id: uuid.UUID
+    file_path: str
+    checksum_sha256: str
+    role: PhotoRole
+    is_original: bool
+    created_at: datetime
+
+
+class PriceCreate(BaseModel):
+    sku_id: uuid.UUID
+    amount: Decimal = Field(ge=0, max_digits=18, decimal_places=4)
+    currency: CurrencyCode
+    valid_from: datetime
+    source: NonEmptyText
+    approved: bool = False
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("valid_from")
+    @classmethod
+    def require_aware_valid_from(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("valid_from must be timezone-aware")
+        return value
+
+
+class PriceRead(ReadSchema):
+    id: uuid.UUID
+    sku_id: uuid.UUID
+    amount: Decimal
+    currency: str
+    valid_from: datetime
+    source: str
+    approved: bool
+    created_at: datetime
