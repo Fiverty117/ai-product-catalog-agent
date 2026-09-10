@@ -132,7 +132,10 @@ Typical variant dimensions:
 - format
 
 ### Photo
-One SKU may have N photos.
+A photo may be ingested before its SKU is identified. Its SKU association is
+therefore optional during intake and may be assigned later. Once identified,
+one SKU may have N photos. Unidentified photos do not cause placeholder Product
+or SKU records to be created.
 
 Optional role:
 - front

@@ -165,15 +165,31 @@ class Photo(Base):
             "AND checksum_sha256 NOT GLOB '*[^0-9a-fA-F]*'",
             name="ck_photos_checksum_sha256_format",
         ),
+        CheckConstraint(
+            "length(trim(original_filename)) > 0",
+            name="ck_photos_original_filename_nonempty",
+        ),
+        CheckConstraint(
+            "mime_type IN ('image/jpeg', 'image/png', 'image/webp')",
+            name="ck_photos_supported_mime_type",
+        ),
+        CheckConstraint("file_size_bytes > 0", name="ck_photos_file_size_positive"),
+        CheckConstraint("width > 0", name="ck_photos_width_positive"),
+        CheckConstraint("height > 0", name="ck_photos_height_positive"),
         Index("ix_photos_sku_id", "sku_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    sku_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("skus.id"), nullable=False
+    sku_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("skus.id"), nullable=True
     )
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(String(255))
+    mime_type: Mapped[str | None] = mapped_column(String(32))
+    file_size_bytes: Mapped[int | None]
+    width: Mapped[int | None]
+    height: Mapped[int | None]
     role: Mapped[PhotoRole] = mapped_column(
         Enum(
             PhotoRole,
@@ -188,7 +204,7 @@ class Photo(Base):
     is_original: Mapped[bool] = mapped_column(Boolean, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
 
-    sku: Mapped[SKU] = relationship(back_populates="photos")
+    sku: Mapped[SKU | None] = relationship(back_populates="photos")
 
 
 class Price(Base):

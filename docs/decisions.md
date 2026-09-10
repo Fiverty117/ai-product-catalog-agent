@@ -74,3 +74,10 @@
 **Decision:** Each generated catalog version freezes product data, price and selected assets.
 
 **Why:** Historical catalogs must remain reproducible even when live data changes.
+
+---
+
+## ADR-012 — Original photos may precede SKU identification
+**Decision:** Permit an original Photo to be registered with no SKU association. Link it to a real SKU only after identification; do not create placeholder Products or SKUs. Intake metadata is mandatory for new uploads but remains nullable in persistence so pre-intake Photo rows can migrate without fabricated metadata.
+
+**Why:** The intake workflow must preserve uploaded bytes before AI or a human has identified the commercial entity. Content-derived storage identity keeps that preservation independent of filenames and later classification.

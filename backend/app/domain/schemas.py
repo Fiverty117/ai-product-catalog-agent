@@ -107,18 +107,28 @@ class SKUFieldProvenanceRead(ReadSchema):
 
 
 class PhotoCreate(BaseModel):
-    sku_id: uuid.UUID
+    sku_id: uuid.UUID | None = None
     file_path: NonEmptyText
     checksum_sha256: Sha256
+    original_filename: NonEmptyText
+    mime_type: str
+    file_size_bytes: int = Field(gt=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
     role: PhotoRole = PhotoRole.OTHER
     is_original: bool
 
 
 class PhotoRead(ReadSchema):
     id: uuid.UUID
-    sku_id: uuid.UUID
+    sku_id: uuid.UUID | None
     file_path: str
     checksum_sha256: str
+    original_filename: str | None
+    mime_type: str | None
+    file_size_bytes: int | None
+    width: int | None
+    height: int | None
     role: PhotoRole
     is_original: bool
     created_at: datetime
