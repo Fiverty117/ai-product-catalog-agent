@@ -81,3 +81,10 @@
 **Decision:** Permit an original Photo to be registered with no SKU association. Link it to a real SKU only after identification; do not create placeholder Products or SKUs. Intake metadata is mandatory for new uploads but remains nullable in persistence so pre-intake Photo rows can migrate without fabricated metadata.
 
 **Why:** The intake workflow must preserve uploaded bytes before AI or a human has identified the commercial entity. Content-derived storage identity keeps that preservation independent of filenames and later classification.
+
+---
+
+## ADR-013 — Single-worker stale-job recovery is at-least-once
+**Decision:** A single SQLite-backed worker commits a Job as running before invoking its handler. On startup or explicit recovery, running jobs older than a configured timeout return to the queue when attempts remain.
+
+**Why:** No database transaction should remain open during slow external work. A crash can therefore occur after an external side effect but before success is recorded, so stale recovery may execute a handler again. Future handlers must use the Job idempotency key and operation-specific idempotency safeguards.

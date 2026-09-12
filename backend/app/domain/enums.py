@@ -32,3 +32,10 @@ class FieldState(str, enum.Enum):
     NOT_LEGIBLE = "not_legible"
     NOT_PRESENT = "not_present"
     FAILED = "failed"
+
+
+class JobStatus(str, enum.Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"

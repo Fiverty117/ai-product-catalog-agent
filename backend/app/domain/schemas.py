@@ -1,11 +1,17 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-from app.domain.enums import FieldSource, FieldState, PhotoRole, SKUFieldName
+from app.domain.enums import (
+    FieldSource,
+    FieldState,
+    JobStatus,
+    PhotoRole,
+    SKUFieldName,
+)
 
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -164,3 +170,26 @@ class PriceRead(ReadSchema):
     source: str
     approved: bool
     created_at: datetime
+
+
+class JobCreate(BaseModel):
+    job_type: NonEmptyText
+    payload: dict[str, Any]
+    idempotency_key: NonEmptyText
+    max_attempts: int = Field(default=3, ge=1)
+
+
+class JobRead(ReadSchema):
+    id: uuid.UUID
+    job_type: str
+    status: JobStatus
+    payload: dict[str, Any]
+    idempotency_key: str
+    attempts: int
+    max_attempts: int
+    next_retry_at: datetime | None
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None

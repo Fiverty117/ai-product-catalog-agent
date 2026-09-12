@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    JSON,
     Numeric,
     String,
     Text,
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.types import UTCDateTime, utc_now
-from app.domain.enums import FieldSource, FieldState, PhotoRole, SKUFieldName
+from app.domain.enums import FieldSource, FieldState, JobStatus, PhotoRole, SKUFieldName
 
 
 class Brand(Base):
@@ -232,3 +233,53 @@ class Price(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
 
     sku: Mapped[SKU] = relationship(back_populates="prices")
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint("length(trim(job_type)) > 0", name="ck_jobs_job_type_nonempty"),
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0",
+            name="ck_jobs_idempotency_key_nonempty",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_jobs_attempts_nonnegative"),
+        CheckConstraint("max_attempts >= 1", name="ck_jobs_max_attempts_positive"),
+        CheckConstraint(
+            "attempts <= max_attempts",
+            name="ck_jobs_attempts_within_maximum",
+        ),
+        Index("ix_jobs_claim", "status", "next_retry_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    job_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[JobStatus] = mapped_column(
+        Enum(
+            JobStatus,
+            name="job_status",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+        default=JobStatus.QUEUED,
+    )
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(
+        String(255), nullable=False, unique=True
+    )
+    attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(nullable=False, default=3)
+    next_retry_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
