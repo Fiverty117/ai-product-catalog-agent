@@ -1,10 +1,20 @@
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Job
+from app.db.types import utc_now
 from app.domain.enums import JobStatus
+
+
+class PermanentJobError(RuntimeError):
+    """A deterministic failure that should bypass remaining retry attempts."""
+
+
+class JobRecoveryError(ValueError):
+    """A failed job cannot be explicitly requeued within its attempt budget."""
 
 
 def enqueue_job(
@@ -41,5 +51,26 @@ def enqueue_job(
         max_attempts=max_attempts,
     )
     session.add(job)
+    session.flush()
+    return job
+
+
+def requeue_failed_job(
+    session: Session,
+    job: Job,
+    *,
+    retry_at: datetime | None = None,
+) -> Job:
+    """Explicitly requeue one failed job without resetting its attempt history."""
+
+    if job.status is not JobStatus.FAILED:
+        raise JobRecoveryError("only a failed job may be requeued")
+    if job.attempts >= job.max_attempts:
+        raise JobRecoveryError("the failed job has exhausted its attempt budget")
+
+    job.status = JobStatus.QUEUED
+    job.next_retry_at = retry_at or utc_now()
+    job.started_at = None
+    job.finished_at = None
     session.flush()
     return job

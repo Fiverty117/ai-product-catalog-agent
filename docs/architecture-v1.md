@@ -155,6 +155,12 @@ Product/SKU state and does not apply values to field provenance. It includes:
 - usage/cost metadata
 - execution timestamps
 
+The initial provider adapter uses the OpenAI Responses API with image inputs and
+schema-constrained output derived from the strict Pydantic extraction contract.
+The deterministic worker resolves and verifies original assets, closes the
+database transaction, and then invokes the provider. Every provider call creates
+a distinct run, including retries of the same durable Job.
+
 ### FieldValue / provenance
 Important extracted fields preserve:
 - value

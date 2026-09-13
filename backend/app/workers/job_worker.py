@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 from app.db.models import Job
 from app.db.types import utc_now
 from app.domain.enums import JobStatus
+from app.services.jobs import PermanentJobError
 
-JobHandler = Callable[[dict[str, Any]], None]
+JobHandler = Callable[["ClaimedJob"], None]
 SessionFactory = Callable[[], Session]
 Clock = Callable[[], datetime]
 
@@ -63,7 +64,7 @@ class JobWorker:
                 raise UnknownJobTypeError(
                     f"no handler registered for job type: {claimed.job_type}"
                 )
-            handler(claimed.payload)
+            handler(claimed)
         except Exception as exc:
             self._record_failure(claimed.id, exc)
         else:
@@ -146,7 +147,7 @@ class JobWorker:
                 return
 
             job.last_error = _concise_error(error)
-            if job.attempts >= job.max_attempts:
+            if isinstance(error, PermanentJobError) or job.attempts >= job.max_attempts:
                 job.status = JobStatus.FAILED
                 job.finished_at = now
                 job.next_retry_at = None

@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -95,7 +96,7 @@ def make_result() -> ProductExtractionResult:
                 "state": "extracted",
             },
             "size_value": {
-                "value": "2.500000",
+                "value": 2.5,
                 "confidence": "0.88",
                 "evidence": "Net weight panel",
                 "state": "extracted",
@@ -123,6 +124,39 @@ def test_valid_extraction_result_schema_uses_decimal_size() -> None:
     assert result.size_value.value == Decimal("2.500000")
     assert isinstance(result.size_value.value, Decimal)
     assert result.servings.state is ObservationState.NOT_LEGIBLE
+
+
+def test_extraction_result_json_schema_uses_numeric_decimal_contract() -> None:
+    schema = ProductExtractionResult.model_json_schema()
+    serialized_schema = json.dumps(schema)
+    size_reference = schema["properties"]["size_value"]["$ref"]
+    size_observation = schema["$defs"][size_reference.rsplit("/", 1)[1]]
+    size_value_options = size_observation["properties"]["value"]["anyOf"]
+
+    assert "pattern" not in serialized_schema
+    assert "(?" not in serialized_schema
+    assert {"type": "number", "exclusiveMinimum": 0} in size_value_options
+    assert {"type": "null"} in size_value_options
+    assert all(option.get("type") != "string" for option in size_value_options)
+
+
+@pytest.mark.parametrize(
+    "invalid_size",
+    [
+        Decimal("0"),
+        Decimal("-1"),
+        Decimal("1.0000001"),
+        Decimal("1234567890123.123456"),
+    ],
+)
+def test_extraction_result_still_rejects_invalid_decimal_sizes(
+    invalid_size: Decimal,
+) -> None:
+    data = make_result().model_dump()
+    data["size_value"]["value"] = invalid_size
+
+    with pytest.raises(ValidationError):
+        ProductExtractionResult.model_validate(data)
 
 
 @pytest.mark.parametrize("confidence", [Decimal("-0.000001"), Decimal("1.000001")])

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db import Base, Job
 from app.db.session import create_sqlite_engine
 from app.domain.enums import JobStatus
-from app.services.jobs import enqueue_job
+from app.services.jobs import JobRecoveryError, enqueue_job, requeue_failed_job
 from app.workers.job_worker import JobWorker
 
 
@@ -96,6 +96,48 @@ def test_duplicate_idempotency_key_reuses_existing_job(job_store) -> None:
         assert len(session.scalars(select(Job)).all()) == 1
 
 
+def test_explicit_requeue_reuses_failed_job_and_preserves_attempts(job_store) -> None:
+    _, session_factory = job_store
+    job = persist_job(session_factory)
+    retry_at = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+    with session_factory() as session:
+        stored = session.get(Job, job.id)
+        assert stored is not None
+        stored.status = JobStatus.FAILED
+        stored.attempts = 1
+        stored.started_at = retry_at - timedelta(seconds=1)
+        stored.finished_at = retry_at
+        stored.last_error = "PermanentJobError: implementation incompatibility"
+        session.commit()
+
+        recovered = requeue_failed_job(session, stored, retry_at=retry_at)
+
+        assert recovered.id == job.id
+        assert recovered.status is JobStatus.QUEUED
+        assert recovered.attempts == 1
+        assert recovered.next_retry_at == retry_at
+        assert recovered.started_at is None
+        assert recovered.finished_at is None
+        assert recovered.last_error == (
+            "PermanentJobError: implementation incompatibility"
+        )
+
+
+def test_explicit_requeue_rejects_exhausted_attempt_budget(job_store) -> None:
+    _, session_factory = job_store
+    job = persist_job(session_factory, max_attempts=1)
+    with session_factory() as session:
+        stored = session.get(Job, job.id)
+        assert stored is not None
+        stored.status = JobStatus.FAILED
+        stored.attempts = 1
+
+        with pytest.raises(JobRecoveryError, match="exhausted"):
+            requeue_failed_job(session, stored)
+
+        assert stored.status is JobStatus.FAILED
+
+
 def test_successful_handler_execution(job_store) -> None:
     _, session_factory = job_store
     job = persist_job(session_factory)
@@ -103,7 +145,7 @@ def test_successful_handler_execution(job_store) -> None:
     clock = FixedClock(datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc))
     worker = JobWorker(
         session_factory,
-        {"test.echo": handled_payloads.append},
+        {"test.echo": lambda claimed: handled_payloads.append(claimed.payload)},
         clock=clock,
     )
 
@@ -124,7 +166,7 @@ def test_handler_failure_requeues_then_succeeds(job_store) -> None:
     clock = FixedClock(datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc))
     calls = 0
 
-    def fail_once(payload) -> None:
+    def fail_once(claimed) -> None:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -154,7 +196,7 @@ def test_permanent_failure_after_max_attempts(job_store) -> None:
     job = persist_job(session_factory, max_attempts=2)
     clock = FixedClock(datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc))
 
-    def always_fail(payload) -> None:
+    def always_fail(claimed) -> None:
         raise ValueError("invalid result")
 
     worker = JobWorker(session_factory, {"test.echo": always_fail}, clock=clock)
@@ -181,7 +223,7 @@ def test_future_retry_job_is_not_claimed_early(job_store) -> None:
         stored.next_retry_at = now + timedelta(minutes=1)
         session.commit()
 
-    worker = JobWorker(session_factory, {"test.echo": lambda payload: None}, clock=lambda: now)
+    worker = JobWorker(session_factory, {"test.echo": lambda claimed: None}, clock=lambda: now)
 
     assert worker.run_once() is None
     assert load_job(session_factory, job.id).attempts == 0
@@ -209,7 +251,7 @@ def test_claim_transaction_is_closed_before_handler_runs(job_store) -> None:
     job = persist_job(tracking_factory)
     created_sessions.clear()
 
-    def assert_claim_session_closed(payload) -> None:
+    def assert_claim_session_closed(claimed) -> None:
         assert len(created_sessions) == 1
         assert created_sessions[0].was_closed is True
         with Session(engine) as observer:

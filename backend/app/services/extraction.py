@@ -15,6 +15,7 @@ from app.domain.enums import ExtractionRunStatus
 from app.domain.schemas import ProductExtractionJobPayload, ProductExtractionResult
 
 PRODUCT_EXTRACTION_JOB_TYPE = "product.extract.v1"
+PRODUCT_EXTRACTION_SCHEMA_VERSION = "product-result-v1"
 
 
 class ExtractionRunError(ValueError):

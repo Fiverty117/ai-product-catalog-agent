@@ -9,6 +9,7 @@ from pydantic import (
     Field,
     JsonValue,
     StringConstraints,
+    WithJsonSchema,
     field_validator,
     model_validator,
 )
@@ -39,7 +40,14 @@ ObservationText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1)
 ]
 ObservationSize = Annotated[
-    Decimal, Field(gt=0, max_digits=18, decimal_places=6)
+    Decimal,
+    Field(gt=0, max_digits=18, decimal_places=6),
+    WithJsonSchema({"type": "number", "exclusiveMinimum": 0}),
+]
+ObservationConfidence = Annotated[
+    Decimal,
+    Field(ge=0, le=1, max_digits=7, decimal_places=6),
+    WithJsonSchema({"type": "number", "minimum": 0, "maximum": 1}),
 ]
 ObservationServings = Annotated[int, Field(gt=0)]
 ObservationValue = TypeVar("ObservationValue")
@@ -51,9 +59,7 @@ class StrictSchema(BaseModel):
 
 class FieldObservation(StrictSchema, Generic[ObservationValue]):
     value: ObservationValue | None
-    confidence: Decimal | None = Field(
-        default=None, ge=0, le=1, max_digits=7, decimal_places=6
-    )
+    confidence: ObservationConfidence | None = None
     evidence: str | None = None
     state: ObservationState
 

@@ -118,3 +118,31 @@ The next implementation block is the **domain contract**:
 6. catalog snapshot model
 
 No production credentials, real customer data, or private catalog assets should be committed to this repository.
+
+## Manual OpenAI extraction smoke test
+
+Automated tests use fake providers and never call OpenAI. To make one explicit
+development call, first install the backend and migrate the configured database:
+
+```powershell
+cd backend
+python -m pip install -e ".[dev]"
+python -m alembic upgrade head
+$env:OPENAI_API_KEY = "your-key-from-your-secret-store"
+$env:OPENAI_VISION_MODEL = "gpt-5.6-sol"
+$env:DATABASE_URL = "sqlite:///./catalog.db"
+python -m app.scripts.manual_openai_extraction --photo-id <REGISTERED_PHOTO_UUID>
+```
+
+Repeat `--photo-id` for additional registered original photos. The command
+enqueues or reuses the deterministic `product.extract.v1` Job, performs at most
+one provider attempt, and prints only the validated result, normalized usage and
+sanitized status. It does not print credentials, image data or raw responses.
+After correcting an implementation or configuration problem, an existing failed
+Job can be retried explicitly while its attempt budget remains:
+
+```powershell
+python -m app.scripts.manual_openai_extraction --photo-id <REGISTERED_PHOTO_UUID> --requeue-failed
+```
+
+This reuses the same idempotent Job and does not reset its attempt counter.

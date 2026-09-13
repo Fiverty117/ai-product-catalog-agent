@@ -95,3 +95,10 @@
 **Decision:** Each ExtractionRun records one concrete model attempt and its input Photos, configuration, validated result or sanitized error. Completing a run does not update canonical Product, SKU or field-provenance state, and terminal runs cannot be overwritten.
 
 **Why:** Provider output must remain auditable and distinct from reviewed canonical data. A separate application step can later enforce normalization, human locks and approval rules.
+
+---
+
+## ADR-015 — OpenAI vision stays behind a narrow provider boundary
+**Decision:** `product.extract.v1` uses an injectable vision-provider interface. The first adapter calls the OpenAI Responses API with locally read image data URLs, `gpt-5.6-sol`, low reasoning effort and Structured Outputs derived from the existing Pydantic result schema. Caller photo order is incidental; verified assets are sent in checksum order. Complete raw responses are not retained.
+
+**Why:** Provider SDK concerns, credentials and transient error mapping should remain outside deterministic extraction orchestration. Canonical ordering aligns execution with idempotency, while one ExtractionRun per provider call preserves retry auditability without storing image bytes or raw responses.
