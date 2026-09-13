@@ -1,14 +1,24 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from app.domain.enums import (
     FieldSource,
     FieldState,
+    ExtractionRunStatus,
     JobStatus,
+    ObservationState,
     PhotoRole,
     SKUFieldName,
 )
@@ -25,6 +35,93 @@ CurrencyCode = Annotated[
         pattern=r"^[A-Za-z]{3}$",
     ),
 ]
+ObservationText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1)
+]
+ObservationSize = Annotated[
+    Decimal, Field(gt=0, max_digits=18, decimal_places=6)
+]
+ObservationServings = Annotated[int, Field(gt=0)]
+ObservationValue = TypeVar("ObservationValue")
+
+
+class StrictSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class FieldObservation(StrictSchema, Generic[ObservationValue]):
+    value: ObservationValue | None
+    confidence: Decimal | None = Field(
+        default=None, ge=0, le=1, max_digits=7, decimal_places=6
+    )
+    evidence: str | None = None
+    state: ObservationState
+
+    @model_validator(mode="after")
+    def validate_value_for_state(self):
+        if self.state is ObservationState.EXTRACTED and self.value is None:
+            raise ValueError("extracted observations require a value")
+        if self.state is not ObservationState.EXTRACTED and self.value is not None:
+            raise ValueError("not_legible and not_present observations require value=null")
+        return self
+
+
+class ProductExtractionResult(StrictSchema):
+    brand_name: FieldObservation[ObservationText]
+    product_name: FieldObservation[ObservationText]
+    flavor: FieldObservation[ObservationText]
+    size_value: FieldObservation[ObservationSize]
+    size_unit: FieldObservation[ObservationText]
+    servings: FieldObservation[ObservationServings]
+
+
+class ProductExtractionJobPayload(StrictSchema):
+    photo_ids: list[uuid.UUID] = Field(min_length=1)
+    provider: NonEmptyText
+    model: NonEmptyText
+    prompt_version: NonEmptyText
+    schema_version: NonEmptyText
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("photo_ids")
+    @classmethod
+    def require_unique_photos(cls, value: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("photo_ids must be unique")
+        return value
+
+    @field_validator("parameters")
+    @classmethod
+    def reject_sensitive_parameters(
+        cls, value: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        sensitive_keys = {
+            "api_key",
+            "apikey",
+            "authorization",
+            "access_token",
+            "bearer_token",
+            "password",
+            "secret",
+            "file_path",
+            "image_path",
+        }
+
+        def inspect_item(item: JsonValue) -> None:
+            if isinstance(item, dict):
+                for key, nested_item in item.items():
+                    normalized_key = key.casefold().replace("-", "_")
+                    if normalized_key in sensitive_keys:
+                        raise ValueError(
+                            f"sensitive or path parameter is not allowed: {key}"
+                        )
+                    inspect_item(nested_item)
+            elif isinstance(item, list):
+                for nested_item in item:
+                    inspect_item(nested_item)
+
+        inspect_item(value)
+        return value
 
 
 class ReadSchema(BaseModel):
@@ -193,3 +290,22 @@ class JobRead(ReadSchema):
     updated_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+
+class ExtractionRunRead(ReadSchema):
+    id: uuid.UUID
+    job_id: uuid.UUID | None
+    sku_id: uuid.UUID | None
+    provider: str
+    model: str
+    prompt_version: str
+    schema_version: str
+    parameters_hash: str
+    status: ExtractionRunStatus
+    started_at: datetime
+    completed_at: datetime | None
+    created_at: datetime
+    structured_result: ProductExtractionResult | None
+    usage: dict[str, JsonValue] | None
+    sanitized_error: str | None
+    photos: list[PhotoRead]

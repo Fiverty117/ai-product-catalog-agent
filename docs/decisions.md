@@ -88,3 +88,10 @@
 **Decision:** A single SQLite-backed worker commits a Job as running before invoking its handler. On startup or explicit recovery, running jobs older than a configured timeout return to the queue when attempts remain.
 
 **Why:** No database transaction should remain open during slow external work. A crash can therefore occur after an external side effect but before success is recorded, so stale recovery may execute a handler again. Future handlers must use the Job idempotency key and operation-specific idempotency safeguards.
+
+---
+
+## ADR-014 — Extraction runs are observational records
+**Decision:** Each ExtractionRun records one concrete model attempt and its input Photos, configuration, validated result or sanitized error. Completing a run does not update canonical Product, SKU or field-provenance state, and terminal runs cannot be overwritten.
+
+**Why:** Provider output must remain auditable and distinct from reviewed canonical data. A separate application step can later enforce normalization, human locks and approval rules.

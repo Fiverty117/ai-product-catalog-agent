@@ -39,3 +39,15 @@ class JobStatus(str, enum.Enum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class ExtractionRunStatus(str, enum.Enum):
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class ObservationState(str, enum.Enum):
+    EXTRACTED = "extracted"
+    NOT_LEGIBLE = "not_legible"
+    NOT_PRESENT = "not_present"

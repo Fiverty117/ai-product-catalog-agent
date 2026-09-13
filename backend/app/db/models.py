@@ -5,12 +5,14 @@ from decimal import Decimal
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Column,
     Enum,
     ForeignKey,
     Index,
     JSON,
     Numeric,
     String,
+    Table,
     Text,
     UniqueConstraint,
     Uuid,
@@ -19,7 +21,33 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.types import UTCDateTime, utc_now
-from app.domain.enums import FieldSource, FieldState, JobStatus, PhotoRole, SKUFieldName
+from app.domain.enums import (
+    ExtractionRunStatus,
+    FieldSource,
+    FieldState,
+    JobStatus,
+    PhotoRole,
+    SKUFieldName,
+)
+
+
+extraction_run_photos = Table(
+    "extraction_run_photos",
+    Base.metadata,
+    Column(
+        "extraction_run_id",
+        Uuid(as_uuid=True),
+        ForeignKey("extraction_runs.id"),
+        primary_key=True,
+    ),
+    Column(
+        "photo_id",
+        Uuid(as_uuid=True),
+        ForeignKey("photos.id"),
+        primary_key=True,
+    ),
+    Index("ix_extraction_run_photos_photo_id", "photo_id"),
+)
 
 
 class Brand(Base):
@@ -89,6 +117,9 @@ class SKU(Base):
     photos: Mapped[list["Photo"]] = relationship(back_populates="sku")
     prices: Mapped[list["Price"]] = relationship(back_populates="sku")
     field_provenance: Mapped[list["SKUFieldProvenance"]] = relationship(
+        back_populates="sku"
+    )
+    extraction_runs: Mapped[list["ExtractionRun"]] = relationship(
         back_populates="sku"
     )
 
@@ -206,6 +237,10 @@ class Photo(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
 
     sku: Mapped[SKU | None] = relationship(back_populates="photos")
+    extraction_runs: Mapped[list["ExtractionRun"]] = relationship(
+        secondary=extraction_run_photos,
+        back_populates="photos",
+    )
 
 
 class Price(Base):
@@ -283,3 +318,71 @@ class Job(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+    extraction_runs: Mapped[list["ExtractionRun"]] = relationship(
+        back_populates="job"
+    )
+
+
+class ExtractionRun(Base):
+    __tablename__ = "extraction_runs"
+    __table_args__ = (
+        CheckConstraint("length(trim(provider)) > 0", name="ck_extraction_runs_provider_nonempty"),
+        CheckConstraint("length(trim(model)) > 0", name="ck_extraction_runs_model_nonempty"),
+        CheckConstraint(
+            "length(trim(prompt_version)) > 0",
+            name="ck_extraction_runs_prompt_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(schema_version)) > 0",
+            name="ck_extraction_runs_schema_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(parameters_hash) = 64 "
+            "AND parameters_hash NOT GLOB '*[^0-9a-fA-F]*'",
+            name="ck_extraction_runs_parameters_hash_format",
+        ),
+        Index("ix_extraction_runs_job_id", "job_id"),
+        Index("ix_extraction_runs_sku_id", "sku_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("jobs.id")
+    )
+    sku_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("skus.id")
+    )
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    parameters_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[ExtractionRunStatus] = mapped_column(
+        Enum(
+            ExtractionRunStatus,
+            name="extraction_run_status",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+        default=ExtractionRunStatus.RUNNING,
+    )
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+    structured_result: Mapped[dict | None] = mapped_column(JSON)
+    usage: Mapped[dict | None] = mapped_column(JSON)
+    sanitized_error: Mapped[str | None] = mapped_column(Text)
+
+    job: Mapped[Job | None] = relationship(back_populates="extraction_runs")
+    sku: Mapped[SKU | None] = relationship(back_populates="extraction_runs")
+    photos: Mapped[list[Photo]] = relationship(
+        secondary=extraction_run_photos,
+        back_populates="extraction_runs",
+    )

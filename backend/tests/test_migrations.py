@@ -14,6 +14,8 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
     assert set(inspect(engine).get_table_names()) == {
         "alembic_version",
         "brands",
+        "extraction_run_photos",
+        "extraction_runs",
         "jobs",
         "photos",
         "prices",

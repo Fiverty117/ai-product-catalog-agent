@@ -145,12 +145,15 @@ Optional role:
 - other
 
 ### ExtractionRun
-Stores one AI extraction attempt, including:
-- model version
+Stores one concrete, observational AI extraction attempt. It is not canonical
+Product/SKU state and does not apply values to field provenance. It includes:
+- provider and model
 - prompt version
-- raw response reference
+- schema and parameter versions
+- one or more input Photos
+- validated structured result or sanitized error
 - usage/cost metadata
-- timestamp
+- execution timestamps
 
 ### FieldValue / provenance
 Important extracted fields preserve:

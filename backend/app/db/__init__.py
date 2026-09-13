@@ -1,6 +1,7 @@
 from app.db.base import Base
 from app.db.models import (
     Brand,
+    ExtractionRun,
     Job,
     Photo,
     PhotoRole,
@@ -13,6 +14,7 @@ from app.db.models import (
 __all__ = [
     "Base",
     "Brand",
+    "ExtractionRun",
     "Job",
     "Photo",
     "PhotoRole",
