@@ -15,6 +15,8 @@ from pydantic import (
 )
 
 from app.domain.enums import (
+    ExtractionReviewDecision,
+    ExtractionReviewField,
     FieldSource,
     FieldState,
     ExtractionRunStatus,
@@ -79,6 +81,49 @@ class ProductExtractionResult(StrictSchema):
     size_value: FieldObservation[ObservationSize]
     size_unit: FieldObservation[ObservationText]
     servings: FieldObservation[ObservationServings]
+
+
+class FlavorCorrection(StrictSchema):
+    flavor: ObservationText
+
+
+class SizeCorrection(StrictSchema):
+    size_value: ObservationSize
+    size_unit: ObservationText
+
+
+class ServingsCorrection(StrictSchema):
+    servings: Annotated[int, Field(strict=True, gt=0)]
+
+
+ReviewCorrection = FlavorCorrection | SizeCorrection | ServingsCorrection
+
+
+class ExtractionFieldReviewRequest(StrictSchema):
+    extraction_run_id: uuid.UUID
+    sku_id: uuid.UUID
+    field_key: ExtractionReviewField
+    decision: ExtractionReviewDecision
+    corrected_value: ReviewCorrection | None = None
+    replace_locked: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def validate_decision_contract(self):
+        expected_correction = {
+            ExtractionReviewField.FLAVOR: FlavorCorrection,
+            ExtractionReviewField.SIZE: SizeCorrection,
+            ExtractionReviewField.SERVINGS: ServingsCorrection,
+        }[self.field_key]
+        if self.decision is ExtractionReviewDecision.CORRECTED:
+            if not isinstance(self.corrected_value, expected_correction):
+                raise ValueError(
+                    f"corrected {self.field_key.value} review requires its typed value"
+                )
+        elif self.corrected_value is not None:
+            raise ValueError("only corrected reviews may include corrected_value")
+        if self.decision is ExtractionReviewDecision.REJECTED and self.replace_locked:
+            raise ValueError("rejected reviews cannot replace locked fields")
+        return self
 
 
 class ProductExtractionJobPayload(StrictSchema):
@@ -205,6 +250,7 @@ class SKUFieldProvenanceCreate(BaseModel):
 class SKUFieldProvenanceRead(ReadSchema):
     id: uuid.UUID
     sku_id: uuid.UUID
+    extraction_run_id: uuid.UUID | None
     field_name: SKUFieldName
     source: FieldSource
     confidence: Decimal | None
@@ -213,6 +259,17 @@ class SKUFieldProvenanceRead(ReadSchema):
     locked: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ExtractionFieldReviewRead(ReadSchema):
+    id: uuid.UUID
+    extraction_run_id: uuid.UUID
+    sku_id: uuid.UUID
+    field_key: ExtractionReviewField
+    decision: ExtractionReviewDecision
+    corrected_value: dict[str, JsonValue] | None
+    created_at: datetime
+    applied_at: datetime | None
 
 
 class PhotoCreate(BaseModel):

@@ -51,3 +51,15 @@ class ObservationState(str, enum.Enum):
     EXTRACTED = "extracted"
     NOT_LEGIBLE = "not_legible"
     NOT_PRESENT = "not_present"
+
+
+class ExtractionReviewField(str, enum.Enum):
+    FLAVOR = "flavor"
+    SIZE = "size"
+    SERVINGS = "servings"
+
+
+class ExtractionReviewDecision(str, enum.Enum):
+    ACCEPTED = "accepted"
+    CORRECTED = "corrected"
+    REJECTED = "rejected"

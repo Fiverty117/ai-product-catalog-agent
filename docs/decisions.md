@@ -102,3 +102,17 @@
 **Decision:** `product.extract.v1` uses an injectable vision-provider interface. The first adapter calls the OpenAI Responses API with locally read image data URLs, `gpt-5.6-sol`, low reasoning effort and Structured Outputs derived from the existing Pydantic result schema. Caller photo order is incidental; verified assets are sent in checksum order. Complete raw responses are not retained.
 
 **Why:** Provider SDK concerns, credentials and transient error mapping should remain outside deterministic extraction orchestration. Canonical ordering aligns execution with idempotency, while one ExtractionRun per provider call preserves retry auditability without storing image bytes or raw responses.
+
+---
+
+## ADR-016 — Human review is an immutable bridge to canonical SKU state
+**Decision:** A field review records one accepted, corrected or rejected human decision for one successful ExtractionRun, target SKU and SKU field bundle. Accepted and corrected decisions atomically update canonical SKU fields plus locked provenance; rejected decisions are audit-only. `applied_at` means canonical mutation completed, so it remains null for rejected reviews. Size value and unit share one review decision and transaction.
+
+**Why:** Extraction runs must remain immutable observations while canonical state changes only through an explicit human action. Separate review audit, canonical value and provenance records preserve both model lineage and human precedence without introducing another source of truth.
+
+---
+
+## ADR-016 — Human review is an immutable bridge to canonical SKU state
+**Decision:** Store one immutable ExtractionFieldReview decision per extraction run, target SKU and review field. Accepted and corrected decisions apply canonical SKU values and locked provenance in the caller's transaction; rejected decisions remain audit-only with `applied_at` unset. Size value and unit are reviewed and applied as one bundle. Accepted model provenance links to its exact ExtractionRun, while human corrections keep model lineage null.
+
+**Why:** Extraction remains observational history, while explicit human action controls canonical changes without losing model lineage or weakening locked-field precedence.

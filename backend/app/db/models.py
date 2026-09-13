@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -22,6 +23,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 from app.db.types import UTCDateTime, utc_now
 from app.domain.enums import (
+    ExtractionReviewDecision,
+    ExtractionReviewField,
     ExtractionRunStatus,
     FieldSource,
     FieldState,
@@ -122,6 +125,9 @@ class SKU(Base):
     extraction_runs: Mapped[list["ExtractionRun"]] = relationship(
         back_populates="sku"
     )
+    extraction_field_reviews: Mapped[list["ExtractionFieldReview"]] = relationship(
+        back_populates="sku"
+    )
 
 
 class SKUFieldProvenance(Base):
@@ -137,6 +143,10 @@ class SKUFieldProvenance(Base):
             name="uq_sku_field_provenance_sku_field",
         ),
         Index("ix_sku_field_provenance_sku_id", "sku_id"),
+        Index(
+            "ix_sku_field_provenance_extraction_run_id",
+            "extraction_run_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -144,6 +154,9 @@ class SKUFieldProvenance(Base):
     )
     sku_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("skus.id"), nullable=False
+    )
+    extraction_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("extraction_runs.id")
     )
     field_name: Mapped[SKUFieldName] = mapped_column(
         Enum(
@@ -186,6 +199,9 @@ class SKUFieldProvenance(Base):
     )
 
     sku: Mapped[SKU] = relationship(back_populates="field_provenance")
+    extraction_run: Mapped["ExtractionRun | None"] = relationship(
+        back_populates="field_provenance"
+    )
 
 
 class Photo(Base):
@@ -386,3 +402,78 @@ class ExtractionRun(Base):
         secondary=extraction_run_photos,
         back_populates="extraction_runs",
     )
+    field_provenance: Mapped[list[SKUFieldProvenance]] = relationship(
+        back_populates="extraction_run"
+    )
+    field_reviews: Mapped[list["ExtractionFieldReview"]] = relationship(
+        back_populates="extraction_run"
+    )
+
+
+class ExtractionFieldReview(Base):
+    __tablename__ = "extraction_field_reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "(decision = 'corrected' AND corrected_value IS NOT NULL) OR "
+            "(decision IN ('accepted', 'rejected') AND corrected_value IS NULL)",
+            name="ck_extraction_field_reviews_corrected_value",
+        ),
+        CheckConstraint(
+            "(decision = 'rejected' AND applied_at IS NULL) OR "
+            "(decision IN ('accepted', 'corrected') AND applied_at IS NOT NULL)",
+            name="ck_extraction_field_reviews_applied_at",
+        ),
+        UniqueConstraint(
+            "extraction_run_id",
+            "sku_id",
+            "field_key",
+            name="uq_extraction_field_reviews_run_sku_field",
+        ),
+        Index(
+            "ix_extraction_field_reviews_extraction_run_id",
+            "extraction_run_id",
+        ),
+        Index("ix_extraction_field_reviews_sku_id", "sku_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    extraction_run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("extraction_runs.id"), nullable=False
+    )
+    sku_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("skus.id"), nullable=False
+    )
+    field_key: Mapped[ExtractionReviewField] = mapped_column(
+        Enum(
+            ExtractionReviewField,
+            name="extraction_review_field",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    decision: Mapped[ExtractionReviewDecision] = mapped_column(
+        Enum(
+            ExtractionReviewDecision,
+            name="extraction_review_decision",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    corrected_value: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON(none_as_null=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+    extraction_run: Mapped[ExtractionRun] = relationship(
+        back_populates="field_reviews"
+    )
+    sku: Mapped[SKU] = relationship(back_populates="extraction_field_reviews")
