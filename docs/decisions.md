@@ -123,3 +123,10 @@
 **Decision:** SKU remains the commercial variant and receives no permanent identity key. Manual creation rejects only an exact normalized dimension tuple within one Product; partial and external-SKU matches are suggestions. A Photo may be unassigned, Product-owned or SKU-owned, never both. Effective SKU media uses matching SKU photos when present and otherwise falls back to matching Product photos without combining levels.
 
 **Why:** Variant dimensions may be incomplete and differ across product types, while units cannot yet be safely converted. Exclusive ownership preserves clear asset meaning, and deterministic fallback lets variants share media without duplicating immutable image bytes.
+
+---
+
+## ADR-019 — Configurable flat Product taxonomy with one optional primary
+**Decision:** Category is configurable persisted data with identity-key v1, not an enum. ProductCategory is the canonical metadata-bearing many-to-many association. A Product may have zero or more associations and at most one primary, enforced with a SQLite partial unique index. Human replacement demotes the previous primary without deleting it; inactive Categories retain historical associations but reject new assignments. Removing a missing association fails explicitly rather than silently succeeding.
+
+**Why:** Products, rather than SKU variants, define catalog grouping. A flat configurable taxonomy supports different businesses and later reviewed AI suggestions without hardcoded vertical assumptions or duplicate canonical state.

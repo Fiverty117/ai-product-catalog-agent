@@ -122,6 +122,12 @@ Manufacturer/brand identity.
 ### Product
 The conceptual product line, e.g. "Gold Standard 100% Whey".
 
+### Category
+A configurable, flat taxonomy entry used to organize Products. Products may
+have multiple Category associations, but at most one is primary for catalog
+section placement. Category values are stored data rather than hardcoded enums;
+SKU variants inherit their Product's categorization conceptually.
+
 ### SKU
 The sellable variant. Price belongs here.
 

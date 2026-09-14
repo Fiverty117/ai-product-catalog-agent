@@ -1,6 +1,7 @@
 from app.db.base import Base
 from app.db.models import (
     Brand,
+    Category,
     ExtractionFieldReview,
     ExtractionIdentityResolution,
     ExtractionRun,
@@ -9,6 +10,7 @@ from app.db.models import (
     PhotoRole,
     Price,
     Product,
+    ProductCategory,
     SKU,
     SKUFieldProvenance,
 )
@@ -16,6 +18,7 @@ from app.db.models import (
 __all__ = [
     "Base",
     "Brand",
+    "Category",
     "ExtractionFieldReview",
     "ExtractionIdentityResolution",
     "ExtractionRun",
@@ -24,6 +27,7 @@ __all__ = [
     "PhotoRole",
     "Price",
     "Product",
+    "ProductCategory",
     "SKU",
     "SKUFieldProvenance",
 ]

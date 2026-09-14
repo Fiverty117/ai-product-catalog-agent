@@ -2,6 +2,7 @@ from alembic import command
 from alembic.config import Config
 import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 
 def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
@@ -15,6 +16,7 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
     assert set(inspect(engine).get_table_names()) == {
         "alembic_version",
         "brands",
+        "categories",
         "extraction_field_reviews",
         "extraction_identity_resolutions",
         "extraction_run_photos",
@@ -23,6 +25,7 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "photos",
         "prices",
         "products",
+        "product_categories",
         "skus",
         "sku_field_provenance",
     }
@@ -425,3 +428,183 @@ def test_shared_media_migration_preserves_photos_and_enforces_single_owner(
     assert migrated[1]["sku_id"] is None
     assert migrated[1]["product_id"] is None
     assert migrated[1]["file_path"] == "storage/originals/b.jpg"
+
+
+def test_category_migration_preserves_existing_domain_and_adds_constraints(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "category-migration.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "20260915_0008")
+
+    engine = create_engine(f"sqlite:///{database_path}")
+    ids = {
+        "brand": "1" * 32,
+        "product": "2" * 32,
+        "sku": "3" * 32,
+        "photo": "4" * 32,
+    }
+    timestamp = "2026-09-16 00:00:00.000000"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO brands "
+                "(id, name, identity_key, created_at, updated_at) VALUES "
+                "(:id, 'Legacy Brand', 'legacy brand', :timestamp, :timestamp)"
+            ),
+            {"id": ids["brand"], "timestamp": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO products "
+                "(id, brand_id, name, identity_key, created_at, updated_at) VALUES "
+                "(:id, :brand, 'Legacy Product', 'legacy product', "
+                ":timestamp, :timestamp)"
+            ),
+            {"id": ids["product"], "brand": ids["brand"], "timestamp": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO skus (id, product_id, flavor, created_at, updated_at) "
+                "VALUES (:id, :product, 'Vanilla', :timestamp, :timestamp)"
+            ),
+            {"id": ids["sku"], "product": ids["product"], "timestamp": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO photos "
+                "(id, product_id, sku_id, file_path, checksum_sha256, role, "
+                "is_original, created_at) VALUES "
+                "(:id, :product, NULL, 'storage/originals/legacy.jpg', :checksum, "
+                "'front', 1, :timestamp)"
+            ),
+            {
+                "id": ids["photo"],
+                "product": ids["product"],
+                "checksum": "a" * 64,
+                "timestamp": timestamp,
+            },
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite:///{database_path}")
+    inspector = inspect(engine)
+    assert {"categories", "product_categories"} <= set(inspector.get_table_names())
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM brands")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM products")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM skus")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM photos")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM categories")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM product_categories")) == 0
+        photo = connection.execute(
+            text("SELECT product_id, sku_id, file_path FROM photos WHERE id = :id"),
+            {"id": ids["photo"]},
+        ).one()
+        assert photo == (
+            ids["product"],
+            None,
+            "storage/originals/legacy.jpg",
+        )
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+
+    category_values = {
+        "id": "5" * 32,
+        "name": "Superfoods",
+        "key": "superfoods",
+        "sort": 1000,
+        "active": True,
+        "timestamp": timestamp,
+    }
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO categories "
+                "(id, name, identity_key, sort_order, is_active, created_at, updated_at) "
+                "VALUES (:id, :name, :key, :sort, :active, :timestamp, :timestamp)"
+            ),
+            category_values,
+        )
+    with engine.begin() as connection:
+        with pytest.raises(IntegrityError, match="categories.identity_key"):
+            connection.execute(
+                text(
+                    "INSERT INTO categories "
+                    "(id, name, identity_key, sort_order, is_active, created_at, "
+                    "updated_at) VALUES (:id, 'SUPERFOODS', :key, :sort, :active, "
+                    ":timestamp, :timestamp)"
+                ),
+                {**category_values, "id": "6" * 32},
+            )
+
+    assignment_values = {
+        "id": "7" * 32,
+        "product": ids["product"],
+        "category": category_values["id"],
+        "primary": True,
+        "source": "human",
+        "verified": True,
+        "locked": True,
+        "timestamp": timestamp,
+    }
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO product_categories "
+                "(id, product_id, category_id, is_primary, source, verified, locked, "
+                "created_at, updated_at) VALUES (:id, :product, :category, :primary, "
+                ":source, :verified, :locked, :timestamp, :timestamp)"
+            ),
+            assignment_values,
+        )
+    with engine.begin() as connection:
+        with pytest.raises(
+            IntegrityError,
+            match="product_categories.product_id, product_categories.category_id",
+        ):
+            connection.execute(
+                text(
+                    "INSERT INTO product_categories "
+                    "(id, product_id, category_id, is_primary, source, verified, "
+                    "locked, created_at, updated_at) VALUES "
+                    "(:id, :product, :category, 0, :source, :verified, :locked, "
+                    ":timestamp, :timestamp)"
+                ),
+                {**assignment_values, "id": "8" * 32},
+            )
+
+    second_category = {
+        **category_values,
+        "id": "9" * 32,
+        "name": "Adaptogens",
+        "key": "adaptogens",
+    }
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO categories "
+                "(id, name, identity_key, sort_order, is_active, created_at, updated_at) "
+                "VALUES (:id, :name, :key, :sort, :active, :timestamp, :timestamp)"
+            ),
+            second_category,
+        )
+    with engine.begin() as connection:
+        with pytest.raises(IntegrityError, match="product_categories.product_id"):
+            connection.execute(
+                text(
+                    "INSERT INTO product_categories "
+                    "(id, product_id, category_id, is_primary, source, verified, "
+                    "locked, created_at, updated_at) VALUES "
+                    "(:id, :product, :category, 1, :source, :verified, :locked, "
+                    ":timestamp, :timestamp)"
+                ),
+                {
+                    **assignment_values,
+                    "id": "a" * 32,
+                    "category": second_category["id"],
+                },
+            )
+    engine.dispose()

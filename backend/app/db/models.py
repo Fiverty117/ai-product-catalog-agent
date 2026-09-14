@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
@@ -116,6 +117,9 @@ class Product(Base):
     brand: Mapped[Brand] = relationship(back_populates="products")
     skus: Mapped[list["SKU"]] = relationship(back_populates="product")
     photos: Mapped[list["Photo"]] = relationship(back_populates="product")
+    category_assignments: Mapped[list["ProductCategory"]] = relationship(
+        back_populates="product"
+    )
     identity_resolutions: Mapped[list["ExtractionIdentityResolution"]] = relationship(
         back_populates="product"
     )
@@ -125,6 +129,102 @@ class Product(Base):
         cleaned = " ".join(value.split())
         self.identity_key = identity_key_v1(cleaned) if cleaned else ""
         return cleaned
+
+
+class Category(Base):
+    __tablename__ = "categories"
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="ck_categories_name_nonempty"),
+        CheckConstraint(
+            "length(identity_key) > 0",
+            name="ck_categories_identity_key_nonempty",
+        ),
+        CheckConstraint(
+            "sort_order >= 0",
+            name="ck_categories_sort_order_nonnegative",
+        ),
+        UniqueConstraint("identity_key", name="uq_categories_identity_key"),
+        Index(
+            "ix_categories_active_order",
+            "is_active",
+            "sort_order",
+            "identity_key",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    identity_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    sort_order: Mapped[int] = mapped_column(nullable=False, default=1000)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    product_assignments: Mapped[list["ProductCategory"]] = relationship(
+        back_populates="category"
+    )
+
+    @validates("name")
+    def normalize_name(self, _key: str, value: str) -> str:
+        cleaned = " ".join(value.split())
+        self.identity_key = identity_key_v1(cleaned) if cleaned else ""
+        return cleaned
+
+
+class ProductCategory(Base):
+    __tablename__ = "product_categories"
+    __table_args__ = (
+        UniqueConstraint(
+            "product_id",
+            "category_id",
+            name="uq_product_categories_product_category",
+        ),
+        Index("ix_product_categories_category_id", "category_id"),
+        Index(
+            "uq_product_categories_one_primary",
+            "product_id",
+            unique=True,
+            sqlite_where=text("is_primary = 1"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("products.id"), nullable=False
+    )
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("categories.id"), nullable=False
+    )
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source: Mapped[FieldSource] = mapped_column(
+        Enum(
+            FieldSource,
+            name="field_source",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    product: Mapped[Product] = relationship(back_populates="category_assignments")
+    category: Mapped[Category] = relationship(back_populates="product_assignments")
 
 
 class SKU(Base):

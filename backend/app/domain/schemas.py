@@ -255,6 +255,39 @@ class ProductRead(ReadSchema):
     updated_at: datetime
 
 
+class CategoryCreate(StrictSchema):
+    name: str
+    sort_order: int = Field(default=1000, strict=True, ge=0)
+    is_active: bool = Field(default=True, strict=True)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return clean_identity_display_name(value)
+
+
+class CategoryRead(ReadSchema):
+    id: uuid.UUID
+    name: str
+    identity_key: str
+    sort_order: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProductCategoryRead(ReadSchema):
+    id: uuid.UUID
+    product_id: uuid.UUID
+    category_id: uuid.UUID
+    is_primary: bool
+    source: FieldSource
+    verified: bool
+    locked: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class SKUCreate(BaseModel):
     product_id: uuid.UUID
     external_sku: NonEmptyText | None = None
