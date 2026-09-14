@@ -164,3 +164,26 @@ The command reports safe Job, run and DerivedImage metadata. It never prints
 credentials or generated base64. Use `--requeue-failed` only for an existing
 failed logical Job that still has attempt budget; normal idempotency and the
 attempt counter are preserved.
+
+## Manual catalog PDF render smoke test
+
+Install the backend dependencies and the local Chromium binary once:
+
+```powershell
+cd backend
+python -m pip install -e ".[dev]"
+python -m playwright install chromium
+python -m alembic upgrade head
+```
+
+Then render an existing immutable CatalogSnapshot through the durable pipeline:
+
+```powershell
+$env:DATABASE_URL = "sqlite:///./catalog.db"
+python -m app.scripts.manual_catalog_render --snapshot-id <CATALOG_SNAPSHOT_UUID>
+```
+
+The command prints only Job, render-run and PDF-artifact metadata. It does not
+persist or print self-contained HTML or embedded image data. Use
+`--requeue-failed` only when the same failed logical Job still has attempt
+budget.

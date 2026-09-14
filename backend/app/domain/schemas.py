@@ -1056,6 +1056,87 @@ class CatalogSnapshotRead(ReadSchema):
     created_at: datetime
 
 
+class CatalogRenderConfig(StrictSchema):
+    locale: NonEmptyText = "es-PY"
+    page_size: Literal["A4"] = "A4"
+    orientation: Literal["portrait", "landscape"] = "portrait"
+    template_key: NonEmptyText = "grabelan-catalog-v1"
+
+
+class CatalogRenderJobPayload(StrictSchema):
+    catalog_snapshot_id: uuid.UUID
+    snapshot_content_hash: Sha256
+    snapshot_schema_version: NonEmptyText
+    template_key: NonEmptyText
+    template_version: NonEmptyText
+    template_hash: Sha256
+    renderer_version: NonEmptyText
+    config: CatalogRenderConfig
+    config_hash: Sha256
+
+
+class CatalogRenderVariantView(StrictSchema):
+    source_sku_id: uuid.UUID
+    label: str | None
+    price_display: NonEmptyText
+
+
+class CatalogRenderProductView(StrictSchema):
+    source_product_id: uuid.UUID
+    brand_name: NonEmptyText
+    product_name: NonEmptyText
+    image_data_uri: NonEmptyText
+    variants: Annotated[list[CatalogRenderVariantView], Field(min_length=1)]
+
+
+class CatalogRenderSectionView(StrictSchema):
+    source_category_id: uuid.UUID
+    category_name: NonEmptyText
+    products: Annotated[list[CatalogRenderProductView], Field(min_length=1)]
+
+
+class CatalogRenderViewModel(StrictSchema):
+    locale: NonEmptyText
+    page_size: Literal["A4"]
+    orientation: Literal["portrait", "landscape"]
+    store_name: NonEmptyText
+    title: NonEmptyText
+    as_of_label: NonEmptyText
+    currency: CurrencyCode
+    sections: Annotated[list[CatalogRenderSectionView], Field(min_length=1)]
+
+
+class CatalogRenderRunRead(ReadSchema):
+    id: uuid.UUID
+    catalog_snapshot_id: uuid.UUID
+    job_id: uuid.UUID | None
+    template_key: str
+    template_version: str
+    template_hash: str
+    renderer_version: str
+    renderer_engine: str
+    renderer_engine_version: str | None
+    locale: str
+    config_hash: str
+    status: ExtractionRunStatus
+    sanitized_error: str | None
+    started_at: datetime
+    completed_at: datetime | None
+    created_at: datetime
+
+
+class CatalogArtifactRead(ReadSchema):
+    id: uuid.UUID
+    catalog_snapshot_id: uuid.UUID
+    render_run_id: uuid.UUID
+    media_type: str
+    file_path: str
+    checksum_sha256: str
+    file_size_bytes: int
+    page_count: int
+    created_at: datetime
+
+
 def _canonical_decimal_string(value: Decimal) -> str:
     text = format(value, "f")
     if "." in text:

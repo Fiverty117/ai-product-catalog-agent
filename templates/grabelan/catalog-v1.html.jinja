@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="{{ locale }}">
+  <head>
+    <meta charset="utf-8">
+    <title>{{ store_name }} - {{ title }}</title>
+    <style>
+      @page { size: {{ page_size }} {{ orientation }}; margin: 14mm; }
+      {{ stylesheet | safe }}
+    </style>
+  </head>
+  <body>
+    <header class="catalog-header">
+      <div>
+        <p class="store-name">{{ store_name }}</p>
+        <h1>{{ title }}</h1>
+      </div>
+      <dl class="catalog-meta">
+        <div><dt>Fecha</dt><dd>{{ as_of_label }}</dd></div>
+        <div><dt>Moneda</dt><dd>{{ currency }}</dd></div>
+      </dl>
+    </header>
+
+    <main>
+      {% for section in sections %}
+      <section class="category-section">
+        <h2>{{ section.category_name }}</h2>
+        <div class="product-grid">
+          {% for product in section.products %}
+          <article class="product-card">
+            <div class="product-image-frame">
+              <img src="{{ product.image_data_uri }}" alt="{{ product.product_name }}">
+            </div>
+            <div class="product-content">
+              <p class="product-brand">{{ product.brand_name }}</p>
+              <h3>{{ product.product_name }}</h3>
+              <ul class="variant-list">
+                {% for variant in product.variants %}
+                <li>
+                  {% if variant.label %}<span>{{ variant.label }}</span>{% endif %}
+                  <strong>{{ variant.price_display }}</strong>
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    </main>
+  </body>
+</html>

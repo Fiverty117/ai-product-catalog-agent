@@ -405,6 +405,24 @@ PDF renderer
 
 Renderer must not read live product/price tables directly.
 
+Block 8 implements `catalog.render.v1` as a durable, deterministic render job.
+The validated CatalogSnapshot is transformed into a narrow view model with
+localized Decimal price strings, generic variant labels and verified frozen
+presentation images embedded as data URIs. Jinja autoescaping keeps snapshot
+text inert, and the versioned local Grabelan template contains no network
+dependencies or invented logo asset.
+
+The logical render identity includes the snapshot UUID and content hash,
+snapshot schema, normalized render config, template key/version/content hash
+and renderer version. Including the snapshot UUID preserves audit lineage even
+when two historical snapshots contain equivalent content. Each attempt commits
+a running CatalogRenderRun before headless Chromium work; browser execution and
+content-addressed PDF storage occur without an open database transaction. A
+successful fresh transaction creates one immutable CatalogArtifact under
+`storage/catalogs/<prefix>/<sha256>.pdf` and records its page count and actual
+Chromium version. Browser versions are audit data, not a promise of
+cross-version byte-identical re-rendering.
+
 ## 13. Skills and prompts
 
 Two initial Codex Skills:

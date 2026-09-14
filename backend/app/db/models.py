@@ -516,6 +516,9 @@ class Job(Base):
     image_enhancement_runs: Mapped[list["ImageEnhancementRun"]] = relationship(
         back_populates="job"
     )
+    catalog_render_runs: Mapped[list["CatalogRenderRun"]] = relationship(
+        back_populates="job"
+    )
 
 
 class ExtractionRun(Base):
@@ -1075,3 +1078,154 @@ class CatalogSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=utc_now
     )
+
+    render_runs: Mapped[list["CatalogRenderRun"]] = relationship(
+        back_populates="catalog_snapshot"
+    )
+    artifacts: Mapped[list["CatalogArtifact"]] = relationship(
+        back_populates="catalog_snapshot"
+    )
+
+
+class CatalogRenderRun(Base):
+    __tablename__ = "catalog_render_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(template_key)) > 0",
+            name="ck_catalog_render_runs_template_key_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(template_version)) > 0",
+            name="ck_catalog_render_runs_template_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(template_hash) = 64 "
+            "AND template_hash NOT GLOB '*[^0-9a-fA-F]*'",
+            name="ck_catalog_render_runs_template_hash_format",
+        ),
+        CheckConstraint(
+            "length(trim(renderer_version)) > 0",
+            name="ck_catalog_render_runs_renderer_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(renderer_engine)) > 0",
+            name="ck_catalog_render_runs_renderer_engine_nonempty",
+        ),
+        CheckConstraint(
+            "renderer_engine_version IS NULL "
+            "OR length(trim(renderer_engine_version)) > 0",
+            name="ck_catalog_render_runs_engine_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(locale)) > 0",
+            name="ck_catalog_render_runs_locale_nonempty",
+        ),
+        CheckConstraint(
+            "length(config_hash) = 64 "
+            "AND config_hash NOT GLOB '*[^0-9a-fA-F]*'",
+            name="ck_catalog_render_runs_config_hash_format",
+        ),
+        Index("ix_catalog_render_runs_catalog_snapshot_id", "catalog_snapshot_id"),
+        Index("ix_catalog_render_runs_job_id", "job_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    catalog_snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("catalog_snapshots.id"), nullable=False
+    )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("jobs.id")
+    )
+    template_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    template_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    template_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    renderer_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    renderer_engine: Mapped[str] = mapped_column(String(100), nullable=False)
+    renderer_engine_version: Mapped[str | None] = mapped_column(String(255))
+    locale: Mapped[str] = mapped_column(String(35), nullable=False)
+    config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[ExtractionRunStatus] = mapped_column(
+        Enum(
+            ExtractionRunStatus,
+            name="catalog_render_run_status",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+        default=ExtractionRunStatus.RUNNING,
+    )
+    sanitized_error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+
+    catalog_snapshot: Mapped[CatalogSnapshot] = relationship(
+        back_populates="render_runs"
+    )
+    job: Mapped[Job | None] = relationship(back_populates="catalog_render_runs")
+    artifact: Mapped["CatalogArtifact | None"] = relationship(
+        back_populates="render_run", uselist=False
+    )
+
+
+class CatalogArtifact(Base):
+    __tablename__ = "catalog_artifacts"
+    __table_args__ = (
+        CheckConstraint(
+            "media_type = 'application/pdf'",
+            name="ck_catalog_artifacts_pdf_media_type",
+        ),
+        CheckConstraint(
+            "length(trim(file_path)) > 0",
+            name="ck_catalog_artifacts_file_path_nonempty",
+        ),
+        CheckConstraint(
+            "length(checksum_sha256) = 64 "
+            "AND checksum_sha256 NOT GLOB '*[^0-9a-fA-F]*'",
+            name="ck_catalog_artifacts_checksum_sha256_format",
+        ),
+        CheckConstraint(
+            "file_size_bytes > 0",
+            name="ck_catalog_artifacts_file_size_positive",
+        ),
+        CheckConstraint(
+            "page_count > 0",
+            name="ck_catalog_artifacts_page_count_positive",
+        ),
+        UniqueConstraint(
+            "render_run_id",
+            name="uq_catalog_artifacts_render_run",
+        ),
+        Index("ix_catalog_artifacts_catalog_snapshot_id", "catalog_snapshot_id"),
+        Index("ix_catalog_artifacts_checksum_sha256", "checksum_sha256"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    catalog_snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("catalog_snapshots.id"), nullable=False
+    )
+    render_run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("catalog_render_runs.id"), nullable=False
+    )
+    media_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="application/pdf"
+    )
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(nullable=False)
+    page_count: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+
+    catalog_snapshot: Mapped[CatalogSnapshot] = relationship(
+        back_populates="artifacts"
+    )
+    render_run: Mapped[CatalogRenderRun] = relationship(back_populates="artifact")

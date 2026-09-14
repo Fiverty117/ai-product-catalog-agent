@@ -1,5 +1,6 @@
 from alembic import command
 from alembic.config import Config
+import json
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,8 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
     assert set(inspect(engine).get_table_names()) == {
         "alembic_version",
         "brands",
+        "catalog_artifacts",
+        "catalog_render_runs",
         "catalog_snapshots",
         "categories",
         "category_suggestion_reviews",
@@ -38,6 +41,67 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
     }
     engine.dispose()
     command.check(config)
+
+
+def test_catalog_render_migration_preserves_snapshot_without_fabricating_output(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "catalog-render-migration.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "20260920_0013")
+
+    timestamp = "2026-09-21 00:00:00.000000"
+    snapshot_id = "1" * 32
+    payload = {
+        "schema_version": "catalog-snapshot-v1",
+        "currency": "PYG",
+        "as_of": "2026-09-20T00:00:00Z",
+        "sections": [],
+    }
+    engine = create_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO catalog_snapshots "
+                "(id, schema_version, currency, as_of, payload, content_hash, "
+                "created_at) VALUES (:id, 'catalog-snapshot-v1', 'PYG', :time, "
+                ":payload, :hash, :time)"
+            ),
+            {
+                "id": snapshot_id,
+                "time": timestamp,
+                "payload": json.dumps(payload),
+                "hash": "a" * 64,
+            },
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite:///{database_path}")
+    inspector = inspect(engine)
+    assert {"catalog_render_runs", "catalog_artifacts"} <= set(
+        inspector.get_table_names()
+    )
+    with engine.connect() as connection:
+        stored = connection.execute(
+            text(
+                "SELECT schema_version, currency, payload, content_hash "
+                "FROM catalog_snapshots WHERE id = :id"
+            ),
+            {"id": snapshot_id},
+        ).one()
+        assert stored == (
+            "catalog-snapshot-v1",
+            "PYG",
+            json.dumps(payload),
+            "a" * 64,
+        )
+        assert connection.scalar(text("SELECT count(*) FROM catalog_render_runs")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM catalog_artifacts")) == 0
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    engine.dispose()
 
 
 def test_catalog_snapshot_migration_preserves_history_without_fabrication(
