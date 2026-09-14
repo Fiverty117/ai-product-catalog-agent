@@ -21,6 +21,8 @@ from app.domain.enums import (
     CatalogReadinessIssueScope,
     CatalogReadinessIssueSeverity,
     CategorySuggestionReviewDecision,
+    DerivedImageReviewDecision,
+    DerivedImageReviewState,
     ExtractionReviewDecision,
     ExtractionReviewField,
     FieldSource,
@@ -29,6 +31,8 @@ from app.domain.enums import (
     JobStatus,
     IdentityResolutionAction,
     ObservationState,
+    PhotoPresentationAssetType,
+    PhotoPresentationWarning,
     PhotoRole,
     SKUFieldName,
 )
@@ -281,6 +285,29 @@ class ImageEnhancementJobPayload(StrictSchema):
         cls, value: dict[str, JsonValue]
     ) -> dict[str, JsonValue]:
         return _reject_sensitive_parameters(value)
+
+
+class DerivedImageReviewCreate(StrictSchema):
+    derived_image_id: uuid.UUID
+    decision: DerivedImageReviewDecision
+
+
+class PhotoPresentationSelection(StrictSchema):
+    photo_id: uuid.UUID
+    derived_image_id: uuid.UUID
+
+
+class EffectivePhotoPresentation(StrictSchema):
+    source_photo_id: uuid.UUID
+    asset_type: PhotoPresentationAssetType
+    derived_image_id: uuid.UUID | None
+    file_path: NonEmptyText
+    checksum_sha256: Sha256
+    mime_type: str | None
+    width: int | None
+    height: int | None
+    backing_asset_available: bool
+    warnings: list[PhotoPresentationWarning]
 
 
 class CategorySuggestion(StrictSchema):
@@ -667,6 +694,9 @@ class ProductCatalogReadiness(StrictSchema):
     hero_photo_id: uuid.UUID | None
     hero_photo_source: CatalogHeroPhotoSource | None
     hero_source_sku_id: uuid.UUID | None
+    hero_presentation_type: PhotoPresentationAssetType | None
+    hero_derived_image_id: uuid.UUID | None
+    presentation_warnings: list[PhotoPresentationWarning]
     ready_sku_ids: list[uuid.UUID]
     sku_reports: list[SKUCatalogReadiness]
     blockers: list[CatalogReadinessIssue]
@@ -743,3 +773,24 @@ class DerivedImageRead(ReadSchema):
     width: int
     height: int
     created_at: datetime
+
+
+class DerivedImageReviewRead(ReadSchema):
+    id: uuid.UUID
+    derived_image_id: uuid.UUID
+    decision: DerivedImageReviewDecision
+    created_at: datetime
+
+
+class PhotoPresentationPreferenceRead(ReadSchema):
+    id: uuid.UUID
+    photo_id: uuid.UUID
+    selected_derived_image_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DerivedImageReviewStateRead(StrictSchema):
+    derived_image_id: uuid.UUID
+    state: DerivedImageReviewState
+    current_review: DerivedImageReviewRead | None

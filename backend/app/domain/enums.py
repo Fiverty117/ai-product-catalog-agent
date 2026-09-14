@@ -47,6 +47,27 @@ class ExtractionRunStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class DerivedImageReviewDecision(str, enum.Enum):
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class DerivedImageReviewState(str, enum.Enum):
+    UNREVIEWED = "unreviewed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class PhotoPresentationAssetType(str, enum.Enum):
+    ORIGINAL = "original"
+    DERIVED = "derived"
+
+
+class PhotoPresentationWarning(str, enum.Enum):
+    PREFERRED_DERIVED_ASSET_MISSING = "preferred_derived_asset_missing"
+    PREFERRED_DERIVED_SELECTION_INVALID = "preferred_derived_selection_invalid"
+
+
 class ObservationState(str, enum.Enum):
     EXTRACTED = "extracted"
     NOT_LEGIBLE = "not_legible"

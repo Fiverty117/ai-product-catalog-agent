@@ -151,3 +151,10 @@
 **Decision:** `image.enhance.v1` accepts only an original Photo, verifies its exact bytes before a provider call, and records every provider attempt as a separate ImageEnhancementRun. Successful output is validated and atomically stored by output checksum under `storage/processed`, then represented by a distinct DerivedImage linked to the run and source Photo. DerivedImage inherits Product/SKU meaning through that Photo and carries no duplicate owner or approval/preference state. A safely stored file left without a database row after completion failure is a recoverable orphan and is not deleted automatically.
 
 **Why:** Originals are immutable source evidence, while generative edits require exact audit lineage and later human review. Separating processed assets prevents successful generation from silently changing catalog presentation, and retaining content-addressed orphans avoids deleting bytes that another deduplicated audit row may reference.
+
+---
+
+## ADR-023 — Image approval history and presentation preference are separate
+**Decision:** Human approval is derived from append-only DerivedImageReview events ordered by creation time and UUID. Current presentation is a singular mutable PhotoPresentationPreference: it may explicitly select one currently approved DerivedImage belonging to the same source Photo, or select the original with a null reference. Rejection of the selected image clears preference in the same caller-owned transaction. Readiness retains its source-hero algorithm and resolves presentation afterward; unavailable preferred derived files fall back to the original with a warning and no read-time repair.
+
+**Why:** Approval is auditable evidence, while presentation preference is revisable current state. Keeping them distinct prevents generation or approval alone from changing a catalog, preserves exact source lineage, and lets a later immutable CatalogSnapshot freeze both source and presentation identities.

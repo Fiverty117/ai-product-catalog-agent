@@ -20,6 +20,7 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "category_suggestion_reviews",
         "category_suggestion_runs",
         "derived_images",
+        "derived_image_reviews",
         "extraction_field_reviews",
         "extraction_identity_resolutions",
         "extraction_run_photos",
@@ -27,6 +28,7 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "image_enhancement_runs",
         "jobs",
         "photos",
+        "photo_presentation_preferences",
         "prices",
         "products",
         "product_categories",
@@ -35,6 +37,140 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
     }
     engine.dispose()
     command.check(config)
+
+
+def test_image_presentation_migration_preserves_historical_media_unreviewed(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "image-enhancement-migration.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "20260918_0011")
+
+    timestamp = "2026-09-18 00:00:00.000000"
+    identifiers = {
+        "brand": "1" * 32,
+        "product": "2" * 32,
+        "sku": "3" * 32,
+        "photo": "4" * 32,
+        "run": "5" * 32,
+        "derived": "6" * 32,
+    }
+    engine = create_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO brands "
+                "(id, name, identity_key, created_at, updated_at) VALUES "
+                "(:brand, 'Brand', 'brand', :timestamp, :timestamp)"
+            ),
+            {**identifiers, "timestamp": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO products "
+                "(id, brand_id, name, identity_key, created_at, updated_at) VALUES "
+                "(:product, :brand, 'Product', 'product', :timestamp, :timestamp)"
+            ),
+            {**identifiers, "timestamp": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO skus (id, product_id, created_at, updated_at) VALUES "
+                "(:sku, :product, :timestamp, :timestamp)"
+            ),
+            {**identifiers, "timestamp": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO photos "
+                "(id, sku_id, product_id, file_path, checksum_sha256, role, "
+                "is_original, original_filename, mime_type, file_size_bytes, "
+                "width, height, created_at) VALUES "
+                "(:photo, :sku, NULL, 'storage/originals/source.png', :checksum, "
+                "'front', 1, 'source.png', 'image/png', 100, 10, 20, :timestamp)"
+            ),
+            {
+                **identifiers,
+                "checksum": "a" * 64,
+                "timestamp": timestamp,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO image_enhancement_runs "
+                "(id, source_photo_id, job_id, provider, model, prompt_version, "
+                "config_version, parameters_hash, status, usage, sanitized_error, "
+                "started_at, completed_at, created_at) VALUES "
+                "(:run, :photo, NULL, 'openai', 'image-model', 'prompt-v1', "
+                "'config-v1', :parameters_hash, 'succeeded', NULL, NULL, "
+                ":timestamp, :timestamp, :timestamp)"
+            ),
+            {
+                **identifiers,
+                "parameters_hash": "b" * 64,
+                "timestamp": timestamp,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO derived_images "
+                "(id, source_photo_id, enhancement_run_id, file_path, "
+                "checksum_sha256, mime_type, file_size_bytes, width, height, "
+                "created_at) VALUES (:derived, :photo, :run, "
+                "'storage/processed/output.png', :checksum, 'image/png', 200, "
+                "20, 30, :timestamp)"
+            ),
+            {**identifiers, "checksum": "c" * 64, "timestamp": timestamp},
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite:///{database_path}")
+    inspector = inspect(engine)
+    assert {
+        "image_enhancement_runs",
+        "derived_images",
+        "derived_image_reviews",
+        "photo_presentation_preferences",
+    } <= set(inspector.get_table_names())
+    with engine.connect() as connection:
+        photo = connection.execute(
+            text(
+                "SELECT sku_id, product_id, file_path, checksum_sha256, is_original "
+                "FROM photos WHERE id = :photo"
+            ),
+            identifiers,
+        ).one()
+        assert photo == (
+            identifiers["sku"],
+            None,
+            "storage/originals/source.png",
+            "a" * 64,
+            1,
+        )
+        derived = connection.execute(
+            text(
+                "SELECT source_photo_id, enhancement_run_id, file_path, "
+                "checksum_sha256 FROM derived_images WHERE id = :derived"
+            ),
+            identifiers,
+        ).one()
+        assert derived == (
+            identifiers["photo"],
+            identifiers["run"],
+            "storage/processed/output.png",
+            "c" * 64,
+        )
+        assert connection.scalar(
+            text("SELECT count(*) FROM derived_image_reviews")
+        ) == 0
+        assert connection.scalar(
+            text("SELECT count(*) FROM photo_presentation_preferences")
+        ) == 0
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    engine.dispose()
 
 
 def test_image_enhancement_migration_preserves_original_photo_ownership(

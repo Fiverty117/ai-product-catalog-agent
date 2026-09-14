@@ -25,6 +25,7 @@ from app.db.base import Base
 from app.db.types import UTCDateTime, utc_now
 from app.domain.enums import (
     CategorySuggestionReviewDecision,
+    DerivedImageReviewDecision,
     ExtractionReviewDecision,
     ExtractionReviewField,
     ExtractionRunStatus,
@@ -424,6 +425,9 @@ class Photo(Base):
     )
     derived_images: Mapped[list["DerivedImage"]] = relationship(
         back_populates="source_photo"
+    )
+    presentation_preference: Mapped["PhotoPresentationPreference | None"] = (
+        relationship(back_populates="photo", uselist=False)
     )
 
 
@@ -961,4 +965,79 @@ class DerivedImage(Base):
     source_photo: Mapped[Photo] = relationship(back_populates="derived_images")
     enhancement_run: Mapped[ImageEnhancementRun] = relationship(
         back_populates="derived_image"
+    )
+    reviews: Mapped[list["DerivedImageReview"]] = relationship(
+        back_populates="derived_image"
+    )
+    selected_by_preferences: Mapped[list["PhotoPresentationPreference"]] = (
+        relationship(back_populates="selected_derived_image")
+    )
+
+
+class DerivedImageReview(Base):
+    __tablename__ = "derived_image_reviews"
+    __table_args__ = (
+        Index(
+            "ix_derived_image_reviews_current",
+            "derived_image_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    derived_image_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("derived_images.id"), nullable=False
+    )
+    decision: Mapped[DerivedImageReviewDecision] = mapped_column(
+        Enum(
+            DerivedImageReviewDecision,
+            name="derived_image_review_decision",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+
+    derived_image: Mapped[DerivedImage] = relationship(back_populates="reviews")
+
+
+class PhotoPresentationPreference(Base):
+    __tablename__ = "photo_presentation_preferences"
+    __table_args__ = (
+        UniqueConstraint(
+            "photo_id",
+            name="uq_photo_presentation_preferences_photo",
+        ),
+        Index(
+            "ix_photo_presentation_preferences_selected_derived_image_id",
+            "selected_derived_image_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    photo_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("photos.id"), nullable=False
+    )
+    selected_derived_image_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("derived_images.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    photo: Mapped[Photo] = relationship(back_populates="presentation_preference")
+    selected_derived_image: Mapped[DerivedImage | None] = relationship(
+        back_populates="selected_by_preferences"
     )

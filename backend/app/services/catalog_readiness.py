@@ -20,6 +20,7 @@ from app.domain.schemas import (
     ProductCatalogReadinessRequest,
     SKUCatalogReadiness,
 )
+from app.services.image_presentation import resolve_effective_photo_presentation
 from app.services.prices import select_active_approved_price
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -101,6 +102,12 @@ def evaluate_product_catalog_readiness(
             )
         )
 
+    hero_presentation = (
+        resolve_effective_photo_presentation(session, photo_id=hero_photo.id)
+        if hero_photo is not None
+        else None
+    )
+
     sku_reports: list[SKUCatalogReadiness] = []
     ready_sku_ids: list[uuid.UUID] = []
     for sku in skus:
@@ -173,6 +180,17 @@ def evaluate_product_catalog_readiness(
         hero_photo_id=hero_photo.id if hero_photo is not None else None,
         hero_photo_source=hero_source,
         hero_source_sku_id=hero_source_sku_id,
+        hero_presentation_type=(
+            hero_presentation.asset_type if hero_presentation is not None else None
+        ),
+        hero_derived_image_id=(
+            hero_presentation.derived_image_id
+            if hero_presentation is not None
+            else None
+        ),
+        presentation_warnings=(
+            hero_presentation.warnings if hero_presentation is not None else []
+        ),
         ready_sku_ids=ready_sku_ids,
         sku_reports=sku_reports,
         blockers=blockers,

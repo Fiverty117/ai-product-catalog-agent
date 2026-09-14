@@ -298,6 +298,16 @@ content-addressed under `storage/processed`; a database failure after a safe fil
 write may leave a recoverable orphan. Such files are not deleted automatically
 because identical output bytes may be shared by multiple audit rows.
 
+Block 6B keeps approval and presentation selection separate. Immutable
+DerivedImageReview events determine current approval from the latest
+`created_at`, then UUID. A single mutable PhotoPresentationPreference may select
+one currently approved DerivedImage for a source Photo; no row or a null
+selection means use the original. Rejecting the selected image atomically clears
+that selection. Catalog readiness still chooses the source hero Photo first,
+then resolves its effective original or explicitly selected derived
+presentation. A missing preferred derived file falls back to the available
+original with a warning, while a derived file never rescues a missing original.
+
 ## 8. Extraction policy
 
 Primary path:
