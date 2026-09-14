@@ -68,3 +68,9 @@ class ExtractionReviewDecision(str, enum.Enum):
 class IdentityResolutionAction(str, enum.Enum):
     USE_EXISTING = "use_existing"
     CREATE_NEW = "create_new"
+
+
+class CategorySuggestionReviewDecision(str, enum.Enum):
+    ACCEPTED = "accepted"
+    CORRECTED = "corrected"
+    REJECTED = "rejected"

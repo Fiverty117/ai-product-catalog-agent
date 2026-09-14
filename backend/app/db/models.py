@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from app.db.base import Base
 from app.db.types import UTCDateTime, utc_now
 from app.domain.enums import (
+    CategorySuggestionReviewDecision,
     ExtractionReviewDecision,
     ExtractionReviewField,
     ExtractionRunStatus,
@@ -120,6 +121,9 @@ class Product(Base):
     category_assignments: Mapped[list["ProductCategory"]] = relationship(
         back_populates="product"
     )
+    category_suggestion_runs: Mapped[list["CategorySuggestionRun"]] = relationship(
+        back_populates="product"
+    )
     identity_resolutions: Mapped[list["ExtractionIdentityResolution"]] = relationship(
         back_populates="product"
     )
@@ -187,6 +191,10 @@ class ProductCategory(Base):
         ),
         Index("ix_product_categories_category_id", "category_id"),
         Index(
+            "ix_product_categories_category_suggestion_run_id",
+            "category_suggestion_run_id",
+        ),
+        Index(
             "uq_product_categories_one_primary",
             "product_id",
             unique=True,
@@ -202,6 +210,9 @@ class ProductCategory(Base):
     )
     category_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("categories.id"), nullable=False
+    )
+    category_suggestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("category_suggestion_runs.id")
     )
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     source: Mapped[FieldSource] = mapped_column(
@@ -225,6 +236,9 @@ class ProductCategory(Base):
 
     product: Mapped[Product] = relationship(back_populates="category_assignments")
     category: Mapped[Category] = relationship(back_populates="product_assignments")
+    category_suggestion_run: Mapped["CategorySuggestionRun | None"] = relationship(
+        back_populates="product_category_assignments"
+    )
 
 
 class SKU(Base):
@@ -486,6 +500,9 @@ class Job(Base):
     extraction_runs: Mapped[list["ExtractionRun"]] = relationship(
         back_populates="job"
     )
+    category_suggestion_runs: Mapped[list["CategorySuggestionRun"]] = relationship(
+        back_populates="job"
+    )
 
 
 class ExtractionRun(Base):
@@ -684,3 +701,129 @@ class ExtractionIdentityResolution(Base):
     )
     brand: Mapped[Brand] = relationship(back_populates="identity_resolutions")
     product: Mapped[Product] = relationship(back_populates="identity_resolutions")
+
+
+class CategorySuggestionRun(Base):
+    __tablename__ = "category_suggestion_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(provider)) > 0",
+            name="ck_category_suggestion_runs_provider_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(model)) > 0",
+            name="ck_category_suggestion_runs_model_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(prompt_version)) > 0",
+            name="ck_category_suggestion_runs_prompt_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(schema_version)) > 0",
+            name="ck_category_suggestion_runs_schema_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(input_hash) = 64 "
+            "AND input_hash NOT GLOB '*[^0-9a-fA-F]*'",
+            name="ck_category_suggestion_runs_input_hash_format",
+        ),
+        Index("ix_category_suggestion_runs_product_id", "product_id"),
+        Index("ix_category_suggestion_runs_job_id", "job_id"),
+        Index("ix_category_suggestion_runs_input_hash", "input_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("products.id"), nullable=False
+    )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("jobs.id")
+    )
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    status: Mapped[ExtractionRunStatus] = mapped_column(
+        Enum(
+            ExtractionRunStatus,
+            name="category_suggestion_run_status",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+        default=ExtractionRunStatus.RUNNING,
+    )
+    structured_result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    sanitized_error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+
+    product: Mapped[Product] = relationship(back_populates="category_suggestion_runs")
+    job: Mapped[Job | None] = relationship(back_populates="category_suggestion_runs")
+    review: Mapped["CategorySuggestionReview | None"] = relationship(
+        back_populates="category_suggestion_run",
+        uselist=False,
+    )
+    product_category_assignments: Mapped[list[ProductCategory]] = relationship(
+        back_populates="category_suggestion_run"
+    )
+
+
+class CategorySuggestionReview(Base):
+    __tablename__ = "category_suggestion_reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "(decision = 'corrected' AND final_selection IS NOT NULL) OR "
+            "(decision IN ('accepted', 'rejected') AND final_selection IS NULL)",
+            name="ck_category_suggestion_reviews_final_selection",
+        ),
+        CheckConstraint(
+            "(decision = 'rejected' AND applied_at IS NULL) OR "
+            "(decision IN ('accepted', 'corrected') AND applied_at IS NOT NULL)",
+            name="ck_category_suggestion_reviews_applied_at",
+        ),
+        UniqueConstraint(
+            "category_suggestion_run_id",
+            name="uq_category_suggestion_reviews_run",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    category_suggestion_run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("category_suggestion_runs.id"),
+        nullable=False,
+    )
+    decision: Mapped[CategorySuggestionReviewDecision] = mapped_column(
+        Enum(
+            CategorySuggestionReviewDecision,
+            name="category_suggestion_review_decision",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    final_selection: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON(none_as_null=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+    category_suggestion_run: Mapped[CategorySuggestionRun] = relationship(
+        back_populates="review"
+    )

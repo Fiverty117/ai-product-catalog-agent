@@ -9,12 +9,14 @@ from pydantic import (
     Field,
     JsonValue,
     StringConstraints,
+    ValidationInfo,
     WithJsonSchema,
     field_validator,
     model_validator,
 )
 
 from app.domain.enums import (
+    CategorySuggestionReviewDecision,
     ExtractionReviewDecision,
     ExtractionReviewField,
     FieldSource,
@@ -52,6 +54,15 @@ ObservationConfidence = Annotated[
     Decimal,
     Field(ge=0, le=1, max_digits=7, decimal_places=6),
     WithJsonSchema({"type": "number", "minimum": 0, "maximum": 1}),
+]
+CategorySuggestionConfidence = Annotated[
+    Decimal,
+    Field(ge=0, le=1, max_digits=7, decimal_places=6),
+    WithJsonSchema({"type": "number", "minimum": 0, "maximum": 1}),
+]
+CategoryEvidence = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
 ]
 ObservationServings = Annotated[int, Field(gt=0)]
 ObservationValue = TypeVar("ObservationValue")
@@ -196,33 +207,154 @@ class ProductExtractionJobPayload(StrictSchema):
     def reject_sensitive_parameters(
         cls, value: dict[str, JsonValue]
     ) -> dict[str, JsonValue]:
-        sensitive_keys = {
-            "api_key",
-            "apikey",
-            "authorization",
-            "access_token",
-            "bearer_token",
-            "password",
-            "secret",
-            "file_path",
-            "image_path",
-        }
+        return _reject_sensitive_parameters(value)
 
-        def inspect_item(item: JsonValue) -> None:
-            if isinstance(item, dict):
-                for key, nested_item in item.items():
-                    normalized_key = key.casefold().replace("-", "_")
-                    if normalized_key in sensitive_keys:
-                        raise ValueError(
-                            f"sensitive or path parameter is not allowed: {key}"
-                        )
-                    inspect_item(nested_item)
-            elif isinstance(item, list):
-                for nested_item in item:
-                    inspect_item(nested_item)
 
-        inspect_item(value)
-        return value
+class CategorySuggestionProductSnapshot(StrictSchema):
+    product_id: uuid.UUID
+    product_name: ObservationText
+
+
+class CategorySuggestionBrandSnapshot(StrictSchema):
+    brand_id: uuid.UUID
+    brand_name: ObservationText
+
+
+class CategorySuggestionSKUSnapshot(StrictSchema):
+    sku_id: uuid.UUID
+    flavor: ObservationText | None = None
+    size_value: Decimal | None = Field(
+        default=None, gt=0, max_digits=18, decimal_places=6
+    )
+    size_unit: ObservationText | None = None
+    servings: int | None = Field(default=None, gt=0)
+
+
+class CategoryTaxonomySnapshot(StrictSchema):
+    category_id: uuid.UUID
+    name: ObservationText
+    identity_key: ObservationText
+    sort_order: int = Field(strict=True, ge=0)
+
+
+class CategorySuggestionInputSnapshot(StrictSchema):
+    product: CategorySuggestionProductSnapshot
+    brand: CategorySuggestionBrandSnapshot
+    sku_variants: list[CategorySuggestionSKUSnapshot]
+    taxonomy: list[CategoryTaxonomySnapshot]
+
+
+class CategorySuggestionJobPayload(StrictSchema):
+    product_id: uuid.UUID
+    provider: NonEmptyText
+    model: NonEmptyText
+    prompt_version: NonEmptyText
+    schema_version: NonEmptyText
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    input_hash: Sha256
+    input_snapshot: CategorySuggestionInputSnapshot
+
+    @field_validator("parameters")
+    @classmethod
+    def reject_sensitive_parameters(
+        cls, value: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        return _reject_sensitive_parameters(value)
+
+
+class CategorySuggestion(StrictSchema):
+    category_id: uuid.UUID
+    confidence: CategorySuggestionConfidence
+    evidence: CategoryEvidence
+
+
+class CategorySuggestionResult(StrictSchema):
+    primary: CategorySuggestion | None
+    secondary: list[CategorySuggestion]
+
+    @model_validator(mode="after")
+    def validate_categories(self, info: ValidationInfo):
+        secondary_ids = [item.category_id for item in self.secondary]
+        if len(secondary_ids) != len(set(secondary_ids)):
+            raise ValueError("secondary category IDs must be unique")
+        if self.primary is not None and self.primary.category_id in secondary_ids:
+            raise ValueError("primary category cannot also be secondary")
+        context = info.context or {}
+        taxonomy_ids = context.get("taxonomy_ids")
+        if taxonomy_ids is not None:
+            suggested_ids = set(secondary_ids)
+            if self.primary is not None:
+                suggested_ids.add(self.primary.category_id)
+            unknown_ids = suggested_ids - set(taxonomy_ids)
+            if unknown_ids:
+                raise ValueError("suggested Category is not in the input taxonomy")
+        return self
+
+
+class CategorySelection(StrictSchema):
+    primary_category_id: uuid.UUID | None
+    secondary_category_ids: list[uuid.UUID]
+
+    @model_validator(mode="after")
+    def validate_categories(self):
+        if len(self.secondary_category_ids) != len(set(self.secondary_category_ids)):
+            raise ValueError("secondary category IDs must be unique")
+        if self.primary_category_id in self.secondary_category_ids:
+            raise ValueError("primary category cannot also be secondary")
+        return self
+
+
+class CategorySuggestionReviewRequest(StrictSchema):
+    category_suggestion_run_id: uuid.UUID
+    decision: CategorySuggestionReviewDecision
+    corrected_selection: CategorySelection | None = None
+    replace_primary: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def validate_decision_contract(self):
+        if self.decision is CategorySuggestionReviewDecision.CORRECTED:
+            if self.corrected_selection is None:
+                raise ValueError("corrected review requires explicit selection")
+        elif self.corrected_selection is not None:
+            raise ValueError("only corrected review may include corrected_selection")
+        if (
+            self.decision is CategorySuggestionReviewDecision.REJECTED
+            and self.replace_primary
+        ):
+            raise ValueError("rejected review cannot replace the primary Category")
+        return self
+
+
+def _reject_sensitive_parameters(
+    value: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    sensitive_keys = {
+        "api_key",
+        "apikey",
+        "authorization",
+        "access_token",
+        "bearer_token",
+        "password",
+        "secret",
+        "file_path",
+        "image_path",
+    }
+
+    def inspect_item(item: JsonValue) -> None:
+        if isinstance(item, dict):
+            for key, nested_item in item.items():
+                normalized_key = key.casefold().replace("-", "_")
+                if normalized_key in sensitive_keys:
+                    raise ValueError(
+                        f"sensitive or path parameter is not allowed: {key}"
+                    )
+                inspect_item(nested_item)
+        elif isinstance(item, list):
+            for nested_item in item:
+                inspect_item(nested_item)
+
+    inspect_item(value)
+    return value
 
 
 class ReadSchema(BaseModel):
@@ -280,12 +412,42 @@ class ProductCategoryRead(ReadSchema):
     id: uuid.UUID
     product_id: uuid.UUID
     category_id: uuid.UUID
+    category_suggestion_run_id: uuid.UUID | None
     is_primary: bool
     source: FieldSource
     verified: bool
     locked: bool
     created_at: datetime
     updated_at: datetime
+
+
+class CategorySuggestionRunRead(ReadSchema):
+    id: uuid.UUID
+    product_id: uuid.UUID
+    job_id: uuid.UUID | None
+    provider: str
+    model: str
+    prompt_version: str
+    schema_version: str
+    parameters: dict[str, JsonValue]
+    input_hash: str
+    input_snapshot: CategorySuggestionInputSnapshot
+    status: ExtractionRunStatus
+    structured_result: CategorySuggestionResult | None
+    usage: dict[str, JsonValue] | None
+    sanitized_error: str | None
+    started_at: datetime
+    completed_at: datetime | None
+    created_at: datetime
+
+
+class CategorySuggestionReviewRead(ReadSchema):
+    id: uuid.UUID
+    category_suggestion_run_id: uuid.UUID
+    decision: CategorySuggestionReviewDecision
+    final_selection: CategorySelection | None
+    created_at: datetime
+    applied_at: datetime | None
 
 
 class SKUCreate(BaseModel):

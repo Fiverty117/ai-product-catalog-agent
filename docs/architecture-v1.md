@@ -128,6 +128,13 @@ have multiple Category associations, but at most one is primary for catalog
 section placement. Category values are stored data rather than hardcoded enums;
 SKU variants inherit their Product's categorization conceptually.
 
+Category suggestions use canonical Product, Brand and SKU context plus a
+persisted snapshot of the active taxonomy. Each provider attempt is immutable
+and advisory. Only an explicit bundle-level human review may apply selected
+Categories to canonical ProductCategory associations. Acceptance first rebuilds
+the same trusted snapshot and logical input hash; a stale run may only be
+corrected explicitly or rejected, never accepted as model-derived truth.
+
 ### SKU
 The sellable variant. Price belongs here.
 

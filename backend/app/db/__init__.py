@@ -2,6 +2,8 @@ from app.db.base import Base
 from app.db.models import (
     Brand,
     Category,
+    CategorySuggestionReview,
+    CategorySuggestionRun,
     ExtractionFieldReview,
     ExtractionIdentityResolution,
     ExtractionRun,
@@ -19,6 +21,8 @@ __all__ = [
     "Base",
     "Brand",
     "Category",
+    "CategorySuggestionReview",
+    "CategorySuggestionRun",
     "ExtractionFieldReview",
     "ExtractionIdentityResolution",
     "ExtractionRun",

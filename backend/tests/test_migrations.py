@@ -17,6 +17,8 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "alembic_version",
         "brands",
         "categories",
+        "category_suggestion_reviews",
+        "category_suggestion_runs",
         "extraction_field_reviews",
         "extraction_identity_resolutions",
         "extraction_run_photos",
@@ -30,8 +32,114 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "sku_field_provenance",
     }
     engine.dispose()
-
     command.check(config)
+
+
+def test_category_suggestion_migration_preserves_canonical_category_origin(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "category-suggestion-migration.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "20260916_0009")
+
+    timestamp = "2026-09-17 00:00:00.000000"
+    ids = {
+        "brand": "1" * 32,
+        "product": "2" * 32,
+        "category": "3" * 32,
+        "assignment": "4" * 32,
+    }
+    engine = create_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO brands "
+                "(id, name, identity_key, created_at, updated_at) VALUES "
+                "(:id, 'Brand', 'brand', :timestamp, :timestamp)"
+            ),
+            {"id": ids["brand"], "timestamp": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO products "
+                "(id, brand_id, name, identity_key, created_at, updated_at) VALUES "
+                "(:id, :brand, 'Product', 'product', :timestamp, :timestamp)"
+            ),
+            {
+                "id": ids["product"],
+                "brand": ids["brand"],
+                "timestamp": timestamp,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO categories "
+                "(id, name, identity_key, sort_order, is_active, created_at, "
+                "updated_at) VALUES "
+                "(:id, 'Superfoods', 'superfoods', 10, 1, :timestamp, :timestamp)"
+            ),
+            {"id": ids["category"], "timestamp": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO product_categories "
+                "(id, product_id, category_id, is_primary, source, verified, locked, "
+                "created_at, updated_at) VALUES "
+                "(:id, :product, :category, 1, 'human', 1, 1, :timestamp, :timestamp)"
+            ),
+            {
+                "id": ids["assignment"],
+                "product": ids["product"],
+                "category": ids["category"],
+                "timestamp": timestamp,
+            },
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite:///{database_path}")
+    inspector = inspect(engine)
+    assert {"category_suggestion_runs", "category_suggestion_reviews"} <= set(
+        inspector.get_table_names()
+    )
+    assert "parameters" in {
+        column["name"]
+        for column in inspector.get_columns("category_suggestion_runs")
+    }
+    assert "category_suggestion_run_id" in {
+        column["name"] for column in inspector.get_columns("product_categories")
+    }
+    assert "uq_product_categories_one_primary" in {
+        index["name"] for index in inspector.get_indexes("product_categories")
+    }
+    with engine.connect() as connection:
+        assignment = connection.execute(
+            text(
+                "SELECT product_id, category_id, is_primary, source, verified, locked, "
+                "category_suggestion_run_id FROM product_categories WHERE id = :id"
+            ),
+            {"id": ids["assignment"]},
+        ).one()
+        assert assignment == (
+            ids["product"],
+            ids["category"],
+            1,
+            "human",
+            1,
+            1,
+            None,
+        )
+        assert connection.scalar(text("SELECT count(*) FROM categories")) == 1
+        assert connection.scalar(
+            text("SELECT count(*) FROM category_suggestion_runs")
+        ) == 0
+        assert connection.scalar(
+            text("SELECT count(*) FROM category_suggestion_reviews")
+        ) == 0
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    engine.dispose()
 
 
 def test_review_migration_preserves_provenance_without_fabricated_lineage(

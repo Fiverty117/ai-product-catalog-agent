@@ -130,3 +130,10 @@
 **Decision:** Category is configurable persisted data with identity-key v1, not an enum. ProductCategory is the canonical metadata-bearing many-to-many association. A Product may have zero or more associations and at most one primary, enforced with a SQLite partial unique index. Human replacement demotes the previous primary without deleting it; inactive Categories retain historical associations but reject new assignments. Removing a missing association fails explicitly rather than silently succeeding.
 
 **Why:** Products, rather than SKU variants, define catalog grouping. A flat configurable taxonomy supports different businesses and later reviewed AI suggestions without hardcoded vertical assumptions or duplicate canonical state.
+
+---
+
+## ADR-020 — Category suggestions are immutable advisory bundles
+**Decision:** A versioned durable job snapshots canonical Product, Brand and SKU context plus the active taxonomy before requesting a structured category suggestion. Every provider attempt creates an immutable CategorySuggestionRun and never mutates ProductCategory. One explicit human bundle review accepts, corrects or rejects the run. Acceptance recomputes the original logical input hash from the current trusted snapshot and the run's persisted provider/model/prompt/schema/parameter lineage, and rejects a stale run before creating audit or canonical rows. Corrected stale runs remain valid explicit human choices after current-category validation; rejected stale runs remain audit-only. Accepted new associations retain model/run lineage; corrected new associations are human-sourced without model lineage; existing association origins are never rewritten. Rejected reviews have `applied_at=null`.
+
+**Why:** Taxonomy and Product context can change after inference. Persisted inputs make suggestions reproducible, while a separate atomic human-review boundary prevents confidence-based auto-classification and preserves canonical provenance.
