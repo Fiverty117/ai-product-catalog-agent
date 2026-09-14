@@ -116,3 +116,10 @@
 **Decision:** Brand and Product exact identity keys use Unicode NFKC normalization, trimmed/collapsed whitespace and casefolding. Brand keys are globally unique; Product keys are unique within a Brand. Loose keys may ignore whitespace and punctuation only to suggest candidates. A typed human decision must explicitly use an existing entity or create a named new one; suggestions never select, merge or create entities.
 
 **Why:** Stable exact keys provide deterministic database integrity without confusing near matches with identity. Versioning the algorithm ensures future normalization changes require an explicit migration and collision review.
+
+---
+
+## ADR-018 — SKU variants use conservative comparison and exclusive Photo ownership
+**Decision:** SKU remains the commercial variant and receives no permanent identity key. Manual creation rejects only an exact normalized dimension tuple within one Product; partial and external-SKU matches are suggestions. A Photo may be unassigned, Product-owned or SKU-owned, never both. Effective SKU media uses matching SKU photos when present and otherwise falls back to matching Product photos without combining levels.
+
+**Why:** Variant dimensions may be incomplete and differ across product types, while units cannot yet be safely converted. Exclusive ownership preserves clear asset meaning, and deterministic fallback lets variants share media without duplicating immutable image bytes.

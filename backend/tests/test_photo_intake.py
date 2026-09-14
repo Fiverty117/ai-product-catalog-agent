@@ -71,6 +71,7 @@ def test_valid_original_photo_intake_preserves_bytes_and_metadata(
     payload = response.json()
     expected_checksum = hashlib.sha256(original_bytes).hexdigest()
     assert payload["sku_id"] is None
+    assert payload["product_id"] is None
     assert payload["checksum_sha256"] == expected_checksum
     assert payload["original_filename"] == filename
     assert payload["mime_type"] == expected_mime
@@ -88,6 +89,7 @@ def test_valid_original_photo_intake_preserves_bytes_and_metadata(
         photo = session.get(Photo, uuid.UUID(payload["id"]))
         assert photo is not None
         assert photo.sku_id is None
+        assert photo.product_id is None
 
 
 def test_actual_content_determines_format_not_filename(intake_client) -> None:

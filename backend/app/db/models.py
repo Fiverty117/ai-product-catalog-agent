@@ -115,6 +115,7 @@ class Product(Base):
 
     brand: Mapped[Brand] = relationship(back_populates="products")
     skus: Mapped[list["SKU"]] = relationship(back_populates="product")
+    photos: Mapped[list["Photo"]] = relationship(back_populates="product")
     identity_resolutions: Mapped[list["ExtractionIdentityResolution"]] = relationship(
         back_populates="product"
     )
@@ -262,12 +263,20 @@ class Photo(Base):
         CheckConstraint("file_size_bytes > 0", name="ck_photos_file_size_positive"),
         CheckConstraint("width > 0", name="ck_photos_width_positive"),
         CheckConstraint("height > 0", name="ck_photos_height_positive"),
+        CheckConstraint(
+            "product_id IS NULL OR sku_id IS NULL",
+            name="ck_photos_single_owner",
+        ),
+        Index("ix_photos_product_id", "product_id"),
         Index("ix_photos_sku_id", "sku_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     sku_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("skus.id"), nullable=True
+    )
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("products.id"), nullable=True
     )
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -291,6 +300,7 @@ class Photo(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
 
     sku: Mapped[SKU | None] = relationship(back_populates="photos")
+    product: Mapped[Product | None] = relationship(back_populates="photos")
     extraction_runs: Mapped[list["ExtractionRun"]] = relationship(
         secondary=extraction_run_photos,
         back_populates="photos",

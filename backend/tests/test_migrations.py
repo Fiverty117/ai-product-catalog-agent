@@ -309,3 +309,119 @@ def test_photo_intake_migration_preserves_existing_photo_rows(tmp_path) -> None:
     assert migrated.file_size_bytes is None
     assert migrated.width is None
     assert migrated.height is None
+
+
+def test_shared_media_migration_preserves_photos_and_enforces_single_owner(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "shared-media.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "20260914_0007")
+
+    engine = create_engine(f"sqlite:///{database_path}")
+    identifiers = {
+        "brand_id": "1" * 32,
+        "product_id": "2" * 32,
+        "sku_id": "3" * 32,
+        "sku_photo_id": "4" * 32,
+        "unassigned_photo_id": "5" * 32,
+    }
+    timestamp = "2026-09-15 00:00:00.000000"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO brands "
+                "(id, name, identity_key, created_at, updated_at) VALUES "
+                "(:brand_id, 'Legacy Brand', 'legacy brand', :timestamp, :timestamp)"
+            ),
+            {**identifiers, "timestamp": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO products "
+                "(id, brand_id, name, identity_key, created_at, updated_at) VALUES "
+                "(:product_id, :brand_id, 'Legacy Product', 'legacy product', "
+                ":timestamp, :timestamp)"
+            ),
+            {**identifiers, "timestamp": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO skus (id, product_id, created_at, updated_at) "
+                "VALUES (:sku_id, :product_id, :timestamp, :timestamp)"
+            ),
+            {**identifiers, "timestamp": timestamp},
+        )
+        for photo_id, sku_id, marker in (
+            (identifiers["sku_photo_id"], identifiers["sku_id"], "a"),
+            (identifiers["unassigned_photo_id"], None, "b"),
+        ):
+            connection.execute(
+                text(
+                    "INSERT INTO photos "
+                    "(id, sku_id, file_path, checksum_sha256, original_filename, "
+                    "mime_type, file_size_bytes, width, height, role, is_original, "
+                    "created_at) VALUES (:id, :sku_id, :path, :checksum, :filename, "
+                    "'image/jpeg', 123, 10, 20, 'front', 1, :timestamp)"
+                ),
+                {
+                    "id": photo_id,
+                    "sku_id": sku_id,
+                    "path": f"storage/originals/{marker}.jpg",
+                    "checksum": marker * 64,
+                    "filename": f"{marker}.jpg",
+                    "timestamp": timestamp,
+                },
+            )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite:///{database_path}")
+    inspector = inspect(engine)
+    assert "product_id" in {
+        column["name"] for column in inspector.get_columns("photos")
+    }
+    assert any(
+        foreign_key["referred_table"] == "products"
+        and foreign_key["constrained_columns"] == ["product_id"]
+        for foreign_key in inspector.get_foreign_keys("photos")
+    )
+    with engine.begin() as connection:
+        migrated = connection.execute(
+            text(
+                "SELECT id, sku_id, product_id, file_path, checksum_sha256, "
+                "original_filename, mime_type, file_size_bytes, width, height "
+                "FROM photos ORDER BY id"
+            )
+        ).mappings().all()
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+        with pytest.raises(Exception, match="ck_photos_single_owner"):
+            connection.execute(
+                text(
+                    "UPDATE photos SET product_id = :product_id "
+                    "WHERE id = :photo_id"
+                ),
+                {
+                    "product_id": identifiers["product_id"],
+                    "photo_id": identifiers["sku_photo_id"],
+                },
+            )
+    engine.dispose()
+
+    assert migrated[0] == {
+        "id": identifiers["sku_photo_id"],
+        "sku_id": identifiers["sku_id"],
+        "product_id": None,
+        "file_path": "storage/originals/a.jpg",
+        "checksum_sha256": "a" * 64,
+        "original_filename": "a.jpg",
+        "mime_type": "image/jpeg",
+        "file_size_bytes": 123,
+        "width": 10,
+        "height": 20,
+    }
+    assert migrated[1]["sku_id"] is None
+    assert migrated[1]["product_id"] is None
+    assert migrated[1]["file_path"] == "storage/originals/b.jpg"

@@ -137,6 +137,11 @@ therefore optional during intake and may be assigned later. Once identified,
 one SKU may have N photos. Unidentified photos do not cause placeholder Product
 or SKU records to be created.
 
+A Photo may instead belong to a Product when the same asset represents all of
+its SKU variants. Product and SKU ownership are mutually exclusive. SKU-specific
+photos override Product-level shared photos for the same requested role; the two
+levels are not combined by default.
+
 Optional role:
 - front
 - side

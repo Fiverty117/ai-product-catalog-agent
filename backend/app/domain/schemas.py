@@ -337,6 +337,7 @@ class ExtractionIdentityResolutionRead(ReadSchema):
 
 class PhotoCreate(BaseModel):
     sku_id: uuid.UUID | None = None
+    product_id: uuid.UUID | None = None
     file_path: NonEmptyText
     checksum_sha256: Sha256
     original_filename: NonEmptyText
@@ -347,10 +348,17 @@ class PhotoCreate(BaseModel):
     role: PhotoRole = PhotoRole.OTHER
     is_original: bool
 
+    @model_validator(mode="after")
+    def require_single_owner(self):
+        if self.sku_id is not None and self.product_id is not None:
+            raise ValueError("Photo cannot belong to both a Product and an SKU")
+        return self
+
 
 class PhotoRead(ReadSchema):
     id: uuid.UUID
     sku_id: uuid.UUID | None
+    product_id: uuid.UUID | None
     file_path: str
     checksum_sha256: str
     original_filename: str | None
