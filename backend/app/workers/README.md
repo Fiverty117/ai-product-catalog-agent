@@ -19,3 +19,16 @@ python -m app.scripts.manual_openai_category_suggestion --product-id <PRODUCT_UU
 The script uses the trusted snapshot/enqueue path and durable worker. Add
 `--requeue-failed` only to retry the same failed logical Job when its existing
 attempt budget has not been exhausted.
+
+For one explicit real image-enhancement smoke attempt, set `OPENAI_API_KEY` and
+optionally `OPENAI_IMAGE_MODEL`, then run from `backend`:
+
+```powershell
+python -m app.scripts.manual_openai_image_enhancement --photo-id <PHOTO_UUID>
+```
+
+This uses the `image.enhance.v1` durable Job, verifies the registered original
+Photo, calls the real image-edit provider outside a database transaction, and
+stores validated output under `storage/processed`. Add `--requeue-failed` only
+to requeue the same failed logical Job while its existing attempt budget allows
+another attempt.

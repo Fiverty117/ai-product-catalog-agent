@@ -146,3 +146,21 @@ python -m app.scripts.manual_openai_extraction --photo-id <REGISTERED_PHOTO_UUID
 ```
 
 This reuses the same idempotent Job and does not reset its attempt counter.
+
+## Manual OpenAI image-enhancement smoke test
+
+After migrating to head, use a registered original Photo with the durable image
+enhancement pipeline:
+
+```powershell
+cd backend
+$env:OPENAI_API_KEY = "your-key-from-your-secret-store"
+$env:OPENAI_IMAGE_MODEL = "gpt-image-2.5-sunburst"
+$env:DATABASE_URL = "sqlite:///./catalog.db"
+python -m app.scripts.manual_openai_image_enhancement --photo-id <PHOTO_UUID>
+```
+
+The command reports safe Job, run and DerivedImage metadata. It never prints
+credentials or generated base64. Use `--requeue-failed` only for an existing
+failed logical Job that still has attempt budget; normal idempotency and the
+attempt counter are preserved.

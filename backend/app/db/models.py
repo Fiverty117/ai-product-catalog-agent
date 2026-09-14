@@ -419,6 +419,12 @@ class Photo(Base):
         secondary=extraction_run_photos,
         back_populates="photos",
     )
+    image_enhancement_runs: Mapped[list["ImageEnhancementRun"]] = relationship(
+        back_populates="source_photo"
+    )
+    derived_images: Mapped[list["DerivedImage"]] = relationship(
+        back_populates="source_photo"
+    )
 
 
 class Price(Base):
@@ -501,6 +507,9 @@ class Job(Base):
         back_populates="job"
     )
     category_suggestion_runs: Mapped[list["CategorySuggestionRun"]] = relationship(
+        back_populates="job"
+    )
+    image_enhancement_runs: Mapped[list["ImageEnhancementRun"]] = relationship(
         back_populates="job"
     )
 
@@ -826,4 +835,130 @@ class CategorySuggestionReview(Base):
 
     category_suggestion_run: Mapped[CategorySuggestionRun] = relationship(
         back_populates="review"
+    )
+
+
+class ImageEnhancementRun(Base):
+    __tablename__ = "image_enhancement_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(provider)) > 0",
+            name="ck_image_enhancement_runs_provider_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(model)) > 0",
+            name="ck_image_enhancement_runs_model_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(prompt_version)) > 0",
+            name="ck_image_enhancement_runs_prompt_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(config_version)) > 0",
+            name="ck_image_enhancement_runs_config_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(parameters_hash) = 64 "
+            "AND parameters_hash NOT GLOB '*[^0-9a-fA-F]*'",
+            name="ck_image_enhancement_runs_parameters_hash_format",
+        ),
+        Index("ix_image_enhancement_runs_source_photo_id", "source_photo_id"),
+        Index("ix_image_enhancement_runs_job_id", "job_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source_photo_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("photos.id"), nullable=False
+    )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("jobs.id")
+    )
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    config_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    parameters_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[ExtractionRunStatus] = mapped_column(
+        Enum(
+            ExtractionRunStatus,
+            name="image_enhancement_run_status",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+        default=ExtractionRunStatus.RUNNING,
+    )
+    usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    sanitized_error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+
+    source_photo: Mapped[Photo] = relationship(
+        back_populates="image_enhancement_runs"
+    )
+    job: Mapped[Job | None] = relationship(back_populates="image_enhancement_runs")
+    derived_image: Mapped["DerivedImage | None"] = relationship(
+        back_populates="enhancement_run",
+        uselist=False,
+    )
+
+
+class DerivedImage(Base):
+    __tablename__ = "derived_images"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(file_path)) > 0",
+            name="ck_derived_images_file_path_nonempty",
+        ),
+        CheckConstraint(
+            "length(checksum_sha256) = 64 "
+            "AND checksum_sha256 NOT GLOB '*[^0-9a-fA-F]*'",
+            name="ck_derived_images_checksum_sha256_format",
+        ),
+        CheckConstraint(
+            "mime_type IN ('image/jpeg', 'image/png', 'image/webp')",
+            name="ck_derived_images_supported_mime_type",
+        ),
+        CheckConstraint(
+            "file_size_bytes > 0",
+            name="ck_derived_images_file_size_positive",
+        ),
+        CheckConstraint("width > 0", name="ck_derived_images_width_positive"),
+        CheckConstraint("height > 0", name="ck_derived_images_height_positive"),
+        UniqueConstraint(
+            "enhancement_run_id",
+            name="uq_derived_images_enhancement_run",
+        ),
+        Index("ix_derived_images_source_photo_id", "source_photo_id"),
+        Index("ix_derived_images_checksum_sha256", "checksum_sha256"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source_photo_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("photos.id"), nullable=False
+    )
+    enhancement_run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("image_enhancement_runs.id"), nullable=False
+    )
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(nullable=False)
+    width: Mapped[int] = mapped_column(nullable=False)
+    height: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+
+    source_photo: Mapped[Photo] = relationship(back_populates="derived_images")
+    enhancement_run: Mapped[ImageEnhancementRun] = relationship(
+        back_populates="derived_image"
     )

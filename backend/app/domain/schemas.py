@@ -266,6 +266,23 @@ class CategorySuggestionJobPayload(StrictSchema):
         return _reject_sensitive_parameters(value)
 
 
+class ImageEnhancementJobPayload(StrictSchema):
+    source_photo_id: uuid.UUID
+    source_checksum_sha256: Sha256
+    provider: NonEmptyText
+    model: NonEmptyText
+    prompt_version: NonEmptyText
+    config_version: NonEmptyText
+    parameters: dict[str, JsonValue]
+
+    @field_validator("parameters")
+    @classmethod
+    def reject_sensitive_parameters(
+        cls, value: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        return _reject_sensitive_parameters(value)
+
+
 class CategorySuggestion(StrictSchema):
     category_id: uuid.UUID
     confidence: CategorySuggestionConfidence
@@ -696,3 +713,33 @@ class ExtractionRunRead(ReadSchema):
     usage: dict[str, JsonValue] | None
     sanitized_error: str | None
     photos: list[PhotoRead]
+
+
+class ImageEnhancementRunRead(ReadSchema):
+    id: uuid.UUID
+    source_photo_id: uuid.UUID
+    job_id: uuid.UUID | None
+    provider: str
+    model: str
+    prompt_version: str
+    config_version: str
+    parameters_hash: str
+    status: ExtractionRunStatus
+    usage: dict[str, JsonValue] | None
+    sanitized_error: str | None
+    started_at: datetime
+    completed_at: datetime | None
+    created_at: datetime
+
+
+class DerivedImageRead(ReadSchema):
+    id: uuid.UUID
+    source_photo_id: uuid.UUID
+    enhancement_run_id: uuid.UUID
+    file_path: str
+    checksum_sha256: str
+    mime_type: str
+    file_size_bytes: int
+    width: int
+    height: int
+    created_at: datetime

@@ -37,7 +37,7 @@ class PhotoStorageIntegrityError(RuntimeError):
     pass
 
 
-def _inspect_image(image_bytes: bytes) -> tuple[str, str, int, int]:
+def inspect_supported_image(image_bytes: bytes) -> tuple[str, str, int, int]:
     if not image_bytes:
         raise PhotoIntakeError("uploaded image is empty")
 
@@ -125,7 +125,7 @@ def register_original_photo(
         if sku is None:
             raise UnknownSKUError(f"SKU not found: {sku_id}")
 
-    mime_type, extension, width, height = _inspect_image(image_bytes)
+    mime_type, extension, width, height = inspect_supported_image(image_bytes)
     checksum_sha256 = hashlib.sha256(image_bytes).hexdigest()
     stored_path = _store_original_bytes(
         image_bytes,

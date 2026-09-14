@@ -144,3 +144,10 @@
 **Decision:** Product catalog readiness is a read-only diagnostic for an explicit currency and UTC point in time. It requires an active canonical primary Category, at least one SKU, at least one SKU with the deterministic active approved Price, and one available front Photo selected by Product-first then stable SKU fallback ordering. Inactive secondary Categories and excluded unpriced SKUs are warnings. AI workflow history is not consulted, and no readiness value is persisted.
 
 **Why:** Category activation, prices, media ownership and local asset availability can change independently. Deriving readiness prevents stale flags while producing the exact Product, SKU, Price and Photo references that a later immutable CatalogSnapshot can freeze.
+
+---
+
+## ADR-022 — Image enhancement creates unapproved immutable derived assets
+**Decision:** `image.enhance.v1` accepts only an original Photo, verifies its exact bytes before a provider call, and records every provider attempt as a separate ImageEnhancementRun. Successful output is validated and atomically stored by output checksum under `storage/processed`, then represented by a distinct DerivedImage linked to the run and source Photo. DerivedImage inherits Product/SKU meaning through that Photo and carries no duplicate owner or approval/preference state. A safely stored file left without a database row after completion failure is a recoverable orphan and is not deleted automatically.
+
+**Why:** Originals are immutable source evidence, while generative edits require exact audit lineage and later human review. Separating processed assets prevents successful generation from silently changing catalog presentation, and retaining content-addressed orphans avoids deleting bytes that another deduplicated audit row may reference.
