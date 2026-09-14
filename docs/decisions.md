@@ -137,3 +137,10 @@
 **Decision:** A versioned durable job snapshots canonical Product, Brand and SKU context plus the active taxonomy before requesting a structured category suggestion. Every provider attempt creates an immutable CategorySuggestionRun and never mutates ProductCategory. One explicit human bundle review accepts, corrects or rejects the run. Acceptance recomputes the original logical input hash from the current trusted snapshot and the run's persisted provider/model/prompt/schema/parameter lineage, and rejects a stale run before creating audit or canonical rows. Corrected stale runs remain valid explicit human choices after current-category validation; rejected stale runs remain audit-only. Accepted new associations retain model/run lineage; corrected new associations are human-sourced without model lineage; existing association origins are never rewritten. Rejected reviews have `applied_at=null`.
 
 **Why:** Taxonomy and Product context can change after inference. Persisted inputs make suggestions reproducible, while a separate atomic human-review boundary prevents confidence-based auto-classification and preserves canonical provenance.
+
+---
+
+## ADR-021 — Catalog readiness is derived from live canonical state
+**Decision:** Product catalog readiness is a read-only diagnostic for an explicit currency and UTC point in time. It requires an active canonical primary Category, at least one SKU, at least one SKU with the deterministic active approved Price, and one available front Photo selected by Product-first then stable SKU fallback ordering. Inactive secondary Categories and excluded unpriced SKUs are warnings. AI workflow history is not consulted, and no readiness value is persisted.
+
+**Why:** Category activation, prices, media ownership and local asset availability can change independently. Deriving readiness prevents stale flags while producing the exact Product, SKU, Price and Photo references that a later immutable CatalogSnapshot can freeze.

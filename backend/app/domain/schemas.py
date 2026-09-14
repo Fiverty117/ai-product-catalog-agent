@@ -16,6 +16,10 @@ from pydantic import (
 )
 
 from app.domain.enums import (
+    CatalogHeroPhotoSource,
+    CatalogReadinessIssueCode,
+    CatalogReadinessIssueScope,
+    CatalogReadinessIssueSeverity,
     CategorySuggestionReviewDecision,
     ExtractionReviewDecision,
     ExtractionReviewField,
@@ -596,6 +600,60 @@ class PriceRead(ReadSchema):
     source: str
     approved: bool
     created_at: datetime
+
+
+class ProductCatalogReadinessRequest(StrictSchema):
+    product_id: uuid.UUID
+    currency: CurrencyCode
+    as_of: datetime | None = None
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("as_of")
+    @classmethod
+    def require_aware_as_of(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("as_of must be timezone-aware")
+        return value
+
+
+class CatalogReadinessIssue(StrictSchema):
+    code: CatalogReadinessIssueCode
+    severity: CatalogReadinessIssueSeverity
+    scope: CatalogReadinessIssueScope
+    message: NonEmptyText
+    product_id: uuid.UUID | None = None
+    sku_id: uuid.UUID | None = None
+    category_id: uuid.UUID | None = None
+    photo_id: uuid.UUID | None = None
+
+
+class SKUCatalogReadiness(StrictSchema):
+    sku_id: uuid.UUID
+    is_publishable: bool
+    active_price_id: uuid.UUID | None
+    active_price_amount: Decimal | None
+    active_price_currency: str | None
+    active_price_valid_from: datetime | None
+    blockers: list[CatalogReadinessIssue]
+
+
+class ProductCatalogReadiness(StrictSchema):
+    product_id: uuid.UUID
+    currency: str
+    as_of: datetime
+    is_ready: bool
+    primary_category_id: uuid.UUID | None
+    hero_photo_id: uuid.UUID | None
+    hero_photo_source: CatalogHeroPhotoSource | None
+    hero_source_sku_id: uuid.UUID | None
+    ready_sku_ids: list[uuid.UUID]
+    sku_reports: list[SKUCatalogReadiness]
+    blockers: list[CatalogReadinessIssue]
+    warnings: list[CatalogReadinessIssue]
 
 
 class JobCreate(BaseModel):

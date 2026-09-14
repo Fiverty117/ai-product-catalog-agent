@@ -74,3 +74,31 @@ class CategorySuggestionReviewDecision(str, enum.Enum):
     ACCEPTED = "accepted"
     CORRECTED = "corrected"
     REJECTED = "rejected"
+
+
+class CatalogReadinessIssueCode(str, enum.Enum):
+    MISSING_PRIMARY_CATEGORY = "missing_primary_category"
+    INACTIVE_PRIMARY_CATEGORY = "inactive_primary_category"
+    NO_SKUS = "no_skus"
+    MISSING_CATALOG_FRONT_PHOTO = "missing_catalog_front_photo"
+    MISSING_CATALOG_PHOTO_ASSET = "missing_catalog_photo_asset"
+    NO_PUBLISHABLE_SKUS = "no_publishable_skus"
+    MISSING_ACTIVE_APPROVED_PRICE = "missing_active_approved_price"
+    INACTIVE_SECONDARY_CATEGORY = "inactive_secondary_category"
+    SKU_EXCLUDED_MISSING_ACTIVE_PRICE = "sku_excluded_missing_active_price"
+
+
+class CatalogReadinessIssueSeverity(str, enum.Enum):
+    BLOCKER = "blocker"
+    WARNING = "warning"
+
+
+class CatalogReadinessIssueScope(str, enum.Enum):
+    PRODUCT = "product"
+    SKU = "sku"
+    CATEGORY = "category"
+
+
+class CatalogHeroPhotoSource(str, enum.Enum):
+    PRODUCT = "product"
+    SKU = "sku"

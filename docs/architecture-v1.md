@@ -255,12 +255,17 @@ Example rule:
 
 ```text
 catalog_ready =
-  required extraction fields accepted
-  AND classification accepted
-  AND image accepted
-  AND approved active price exists
-  AND review complete
+  active primary Category exists
+  AND at least one SKU exists
+  AND at least one SKU has an active approved Price for the requested currency/as_of
+  AND a usable front Photo exists at Product level or on one of its SKUs
 ```
+
+Readiness is a live, deterministic diagnostic over canonical state. AI runs and
+review history are not prerequisites. Unpublishable sibling SKUs and inactive
+secondary Categories remain visible as non-blocking diagnostics. Catalog
+versions later freeze the selected SKU, Price, Category and Photo references;
+readiness itself remains unpersisted.
 
 ## 7. Image policy
 
