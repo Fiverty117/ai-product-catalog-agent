@@ -234,14 +234,17 @@ Key ideas:
 ### Catalog
 Logical catalog definition.
 
-### CatalogVersion
-Immutable snapshot containing exactly what was published:
-- selected SKUs
-- displayed names
-- displayed prices
-- referenced image assets
-- template/version
-- generated PDF reference
+### CatalogSnapshot
+Create-only historical value data containing the exact selected Products/SKUs,
+display names, primary Category grouping, active approved Prices and effective
+hero presentation. Source UUIDs provide audit traceability inside the JSON
+payload but are not foreign keys and are never dereferenced on historical read.
+Decimal values use canonical strings and the complete renderable payload has a
+deterministic SHA-256 content hash. Equal content may have multiple snapshot
+rows; the row UUID identifies the publication event.
+
+A future rendered catalog artifact will reference one CatalogSnapshot and add
+template/render/PDF lifecycle data without making the content snapshot mutable.
 
 ## 6. Processing state
 
@@ -278,6 +281,14 @@ review history are not prerequisites. Unpublishable sibling SKUs and inactive
 secondary Categories remain visible as non-blocking diagnostics. Catalog
 versions later freeze the selected SKU, Price, Category and Photo references;
 readiness itself remains unpersisted.
+
+Snapshot creation is the stricter publication boundary. It evaluates every
+explicitly selected Product with one shared currency/as-of decision, rejects the
+whole request if any Product is not ready, verifies readiness's exact Price and
+hero decisions, then fully validates only the original and effective hero
+assets being frozen. A missing or invalid preferred derived selection is not
+silently published from its readiness fallback; it must be corrected before a
+snapshot is created.
 
 ## 7. Image policy
 
@@ -335,6 +346,14 @@ Each stored image keeps:
 
 Checksums support deduplication and caching without requiring a complex content-addressed storage hierarchy in the first implementation.
 
+CatalogSnapshot asset locators are portable paths relative to the canonical
+storage root (for example `originals/ab/<sha>.png` or
+`processed/cd/<sha>.png`). Snapshot creation rejects external, traversing or
+non-content-addressed paths and verifies bytes, checksum, decoded format and
+persisted dimensions. Historical rendering relies on these immutable
+content-addressed files; external deletion of historical assets breaks
+re-renderability and is outside normal application semantics.
+
 SQLite configuration should favor:
 - WAL mode
 - short transactions
@@ -375,7 +394,7 @@ The backend should expose UI-oriented derived statuses rather than forcing React
 Catalog generation is deterministic.
 
 ```text
-CatalogVersion snapshot
+CatalogSnapshot payload
        ↓
 Validated render DTO
        ↓

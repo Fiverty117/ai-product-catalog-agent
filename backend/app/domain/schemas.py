@@ -11,6 +11,7 @@ from pydantic import (
     StringConstraints,
     ValidationInfo,
     WithJsonSchema,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -308,6 +309,255 @@ class EffectivePhotoPresentation(StrictSchema):
     height: int | None
     backing_asset_available: bool
     warnings: list[PhotoPresentationWarning]
+
+
+NonEmptyUUIDList = Annotated[list[uuid.UUID], Field(min_length=1)]
+FrozenMoney = Annotated[Decimal, Field(ge=0, max_digits=18, decimal_places=4)]
+FrozenSize = Annotated[Decimal, Field(gt=0, max_digits=18, decimal_places=6)]
+FrozenServings = Annotated[int, Field(gt=0)]
+
+
+class CatalogSnapshotCreate(StrictSchema):
+    product_ids: NonEmptyUUIDList
+    currency: CurrencyCode
+    as_of: datetime | None = None
+    sku_selection: dict[uuid.UUID, NonEmptyUUIDList] | None = None
+
+    @field_validator("product_ids")
+    @classmethod
+    def require_unique_products(cls, value: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("product_ids must be unique")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("as_of")
+    @classmethod
+    def require_aware_as_of(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("as_of must be timezone-aware")
+        return value
+
+    @field_validator("sku_selection")
+    @classmethod
+    def require_unique_sku_selections(
+        cls,
+        value: dict[uuid.UUID, list[uuid.UUID]] | None,
+    ) -> dict[uuid.UUID, list[uuid.UUID]] | None:
+        if value is not None:
+            for sku_ids in value.values():
+                if len(sku_ids) != len(set(sku_ids)):
+                    raise ValueError("selected SKU IDs must be unique per Product")
+        return value
+
+    @model_validator(mode="after")
+    def require_selected_products_for_sku_mapping(self):
+        if self.sku_selection is not None:
+            unknown = set(self.sku_selection) - set(self.product_ids)
+            if unknown:
+                raise ValueError(
+                    "sku_selection keys must be present in product_ids"
+                )
+        return self
+
+
+class FrozenCatalogAsset(StrictSchema):
+    checksum_sha256: Sha256
+    mime_type: NonEmptyText
+    file_size_bytes: int = Field(gt=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    storage_relative_path: NonEmptyText
+
+    @model_validator(mode="after")
+    def require_content_addressed_relative_path(self):
+        parts = self.storage_relative_path.split("/")
+        expected_extensions = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+        }
+        if (
+            len(parts) != 3
+            or parts[0] not in {"originals", "processed"}
+            or parts[1] != self.checksum_sha256[:2].lower()
+            or parts[2]
+            != self.checksum_sha256.lower()
+            + expected_extensions.get(self.mime_type, "")
+        ):
+            raise ValueError(
+                "storage_relative_path must be a canonical content-addressed path"
+            )
+        return self
+
+
+class FrozenCatalogPrice(StrictSchema):
+    source_price_id: uuid.UUID
+    amount: FrozenMoney
+    currency: CurrencyCode
+    valid_from: datetime
+    created_at: datetime
+    source: NonEmptyText
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def reject_non_decimal_amount(cls, value):
+        if not isinstance(value, (Decimal, str)):
+            raise ValueError("frozen Decimal values must use Decimal or string input")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("valid_from", "created_at")
+    @classmethod
+    def require_aware_timestamps(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("frozen Price timestamps must be timezone-aware")
+        return value
+
+    @field_serializer("amount")
+    def serialize_amount(self, value: Decimal) -> str:
+        return _canonical_decimal_string(value)
+
+
+class CatalogVariantSnapshot(StrictSchema):
+    source_sku_id: uuid.UUID
+    external_sku: str | None
+    flavor: str | None
+    size_value: FrozenSize | None
+    size_unit: str | None
+    servings: FrozenServings | None
+    price: FrozenCatalogPrice
+
+    @field_validator("size_value", mode="before")
+    @classmethod
+    def reject_non_decimal_size(cls, value):
+        if value is not None and not isinstance(value, (Decimal, str)):
+            raise ValueError("frozen Decimal values must use Decimal or string input")
+        return value
+
+    @field_serializer("size_value")
+    def serialize_size_value(self, value: Decimal | None) -> str | None:
+        return _canonical_decimal_string(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def require_complete_size_pair(self):
+        if (self.size_value is None) != (self.size_unit is None):
+            raise ValueError("size_value and size_unit must be set together")
+        return self
+
+
+class CatalogHeroSnapshot(StrictSchema):
+    source_photo_id: uuid.UUID
+    source_photo_owner_type: CatalogHeroPhotoSource
+    source_photo_owner_sku_id: uuid.UUID | None
+    source_original_asset: FrozenCatalogAsset
+    presentation_type: PhotoPresentationAssetType
+    source_derived_image_id: uuid.UUID | None
+    presentation_asset: FrozenCatalogAsset
+
+    @model_validator(mode="after")
+    def require_derived_id_for_derived_presentation(self):
+        if (
+            self.presentation_type is PhotoPresentationAssetType.DERIVED
+            and self.source_derived_image_id is None
+        ):
+            raise ValueError("derived presentation requires source_derived_image_id")
+        if (
+            self.presentation_type is PhotoPresentationAssetType.ORIGINAL
+            and self.source_derived_image_id is not None
+        ):
+            raise ValueError("original presentation cannot reference DerivedImage")
+        if (
+            self.presentation_type is PhotoPresentationAssetType.ORIGINAL
+            and self.presentation_asset != self.source_original_asset
+        ):
+            raise ValueError("original presentation asset must equal source asset")
+        if not self.source_original_asset.storage_relative_path.startswith(
+            "originals/"
+        ):
+            raise ValueError("source original asset must use originals storage")
+        expected_area = (
+            "processed/"
+            if self.presentation_type is PhotoPresentationAssetType.DERIVED
+            else "originals/"
+        )
+        if not self.presentation_asset.storage_relative_path.startswith(expected_area):
+            raise ValueError("presentation asset uses the wrong storage area")
+        return self
+
+
+class CatalogProductSnapshot(StrictSchema):
+    source_brand_id: uuid.UUID
+    brand_name: NonEmptyText
+    brand_identity_key: NonEmptyText
+    source_product_id: uuid.UUID
+    product_name: NonEmptyText
+    product_identity_key: NonEmptyText
+    hero: CatalogHeroSnapshot
+    variants: Annotated[list[CatalogVariantSnapshot], Field(min_length=1)]
+
+
+class FrozenCatalogCategory(StrictSchema):
+    source_category_id: uuid.UUID
+    name: NonEmptyText
+    identity_key: NonEmptyText
+    sort_order: int = Field(ge=0)
+
+
+class CatalogSectionSnapshot(StrictSchema):
+    category: FrozenCatalogCategory
+    products: Annotated[list[CatalogProductSnapshot], Field(min_length=1)]
+
+
+class CatalogSnapshotData(StrictSchema):
+    schema_version: Literal["catalog-snapshot-v1"]
+    currency: CurrencyCode
+    as_of: datetime
+    sections: Annotated[list[CatalogSectionSnapshot], Field(min_length=1)]
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("as_of")
+    @classmethod
+    def require_aware_as_of(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("snapshot as_of must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def validate_unique_content_and_currency(self):
+        category_ids: list[uuid.UUID] = []
+        product_ids: list[uuid.UUID] = []
+        sku_ids: list[uuid.UUID] = []
+        for section in self.sections:
+            category_ids.append(section.category.source_category_id)
+            for product in section.products:
+                product_ids.append(product.source_product_id)
+                for variant in product.variants:
+                    sku_ids.append(variant.source_sku_id)
+                    if variant.price.currency != self.currency:
+                        raise ValueError(
+                            "frozen Price currency must match snapshot currency"
+                        )
+        for values, label in (
+            (category_ids, "Category"),
+            (product_ids, "Product"),
+            (sku_ids, "SKU"),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"snapshot {label} IDs must be unique")
+        return self
 
 
 class CategorySuggestion(StrictSchema):
@@ -794,3 +1044,20 @@ class DerivedImageReviewStateRead(StrictSchema):
     derived_image_id: uuid.UUID
     state: DerivedImageReviewState
     current_review: DerivedImageReviewRead | None
+
+
+class CatalogSnapshotRead(ReadSchema):
+    id: uuid.UUID
+    schema_version: str
+    currency: str
+    as_of: datetime
+    payload: CatalogSnapshotData
+    content_hash: str
+    created_at: datetime
+
+
+def _canonical_decimal_string(value: Decimal) -> str:
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"

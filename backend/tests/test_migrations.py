@@ -16,6 +16,7 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
     assert set(inspect(engine).get_table_names()) == {
         "alembic_version",
         "brands",
+        "catalog_snapshots",
         "categories",
         "category_suggestion_reviews",
         "category_suggestion_runs",
@@ -37,6 +38,58 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
     }
     engine.dispose()
     command.check(config)
+
+
+def test_catalog_snapshot_migration_preserves_history_without_fabrication(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "catalog-snapshot-migration.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "20260919_0012")
+
+    timestamp = "2026-09-20 00:00:00.000000"
+    brand_id = "1" * 32
+    engine = create_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO brands "
+                "(id, name, identity_key, created_at, updated_at) VALUES "
+                "(:id, 'Historical Brand', 'historical brand', :time, :time)"
+            ),
+            {"id": brand_id, "time": timestamp},
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite:///{database_path}")
+    inspector = inspect(engine)
+    assert "catalog_snapshots" in inspector.get_table_names()
+    assert {column["name"] for column in inspector.get_columns("catalog_snapshots")} == {
+        "id",
+        "schema_version",
+        "currency",
+        "as_of",
+        "payload",
+        "content_hash",
+        "created_at",
+    }
+    assert {index["name"]: index["unique"] for index in inspector.get_indexes(
+        "catalog_snapshots"
+    )} == {
+        "ix_catalog_snapshots_content_hash": 0,
+        "ix_catalog_snapshots_created_at": 0,
+    }
+    with engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT name, identity_key FROM brands WHERE id = :id"),
+            {"id": brand_id},
+        ).one() == ("Historical Brand", "historical brand")
+        assert connection.scalar(text("SELECT count(*) FROM catalog_snapshots")) == 0
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    engine.dispose()
 
 
 def test_image_presentation_migration_preserves_historical_media_unreviewed(

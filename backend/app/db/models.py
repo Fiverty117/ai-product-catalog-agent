@@ -1041,3 +1041,37 @@ class PhotoPresentationPreference(Base):
     selected_derived_image: Mapped[DerivedImage | None] = relationship(
         back_populates="selected_by_preferences"
     )
+
+
+class CatalogSnapshot(Base):
+    __tablename__ = "catalog_snapshots"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(schema_version)) > 0",
+            name="ck_catalog_snapshots_schema_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(currency) = 3 AND currency = upper(currency) "
+            "AND currency NOT GLOB '*[^A-Z]*'",
+            name="ck_catalog_snapshots_currency_iso_code",
+        ),
+        CheckConstraint(
+            "length(content_hash) = 64 "
+            "AND content_hash NOT GLOB '*[^0-9a-fA-F]*'",
+            name="ck_catalog_snapshots_content_hash_format",
+        ),
+        Index("ix_catalog_snapshots_content_hash", "content_hash"),
+        Index("ix_catalog_snapshots_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    schema_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
