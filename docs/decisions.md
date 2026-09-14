@@ -112,7 +112,7 @@
 
 ---
 
-## ADR-016 — Human review is an immutable bridge to canonical SKU state
-**Decision:** Store one immutable ExtractionFieldReview decision per extraction run, target SKU and review field. Accepted and corrected decisions apply canonical SKU values and locked provenance in the caller's transaction; rejected decisions remain audit-only with `applied_at` unset. Size value and unit are reviewed and applied as one bundle. Accepted model provenance links to its exact ExtractionRun, while human corrections keep model lineage null.
+## ADR-017 — Identity-key v1 and human-only identity resolution
+**Decision:** Brand and Product exact identity keys use Unicode NFKC normalization, trimmed/collapsed whitespace and casefolding. Brand keys are globally unique; Product keys are unique within a Brand. Loose keys may ignore whitespace and punctuation only to suggest candidates. A typed human decision must explicitly use an existing entity or create a named new one; suggestions never select, merge or create entities.
 
-**Why:** Extraction remains observational history, while explicit human action controls canonical changes without losing model lineage or weakening locked-field precedence.
+**Why:** Stable exact keys provide deterministic database integrity without confusing near matches with identity. Versioning the algorithm ensures future normalization changes require an explicit migration and collision review.

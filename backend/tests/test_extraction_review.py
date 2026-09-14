@@ -54,9 +54,14 @@ def session(tmp_path) -> Session:
     engine.dispose()
 
 
-def make_sku(session: Session, **values) -> SKU:
+def make_sku(
+    session: Session,
+    *,
+    brand_name: str = "Test Brand",
+    **values,
+) -> SKU:
     sku = SKU(
-        product=Product(name="Premium Whey", brand=Brand(name="Test Brand")),
+        product=Product(name="Premium Whey", brand=Brand(name=brand_name)),
         **values,
     )
     session.add(sku)
@@ -249,7 +254,7 @@ def test_accept_and_correct_servings(session: Session) -> None:
         ),
     )
 
-    corrected_sku = make_sku(session)
+    corrected_sku = make_sku(session, brand_name="Other Brand")
     corrected_run = make_run(session)
     apply_extraction_field_review(
         session,

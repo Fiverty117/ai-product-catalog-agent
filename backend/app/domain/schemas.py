@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any, Generic, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar
 
 from pydantic import (
     BaseModel,
@@ -21,10 +21,12 @@ from app.domain.enums import (
     FieldState,
     ExtractionRunStatus,
     JobStatus,
+    IdentityResolutionAction,
     ObservationState,
     PhotoRole,
     SKUFieldName,
 )
+from app.domain.identity import clean_identity_display_name
 
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -126,6 +128,54 @@ class ExtractionFieldReviewRequest(StrictSchema):
         return self
 
 
+class UseExistingBrandDecision(StrictSchema):
+    action: Literal["use_existing"]
+    brand_id: uuid.UUID
+
+
+class CreateNewBrandDecision(StrictSchema):
+    action: Literal["create_new"]
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return clean_identity_display_name(value)
+
+
+BrandIdentityDecision = Annotated[
+    UseExistingBrandDecision | CreateNewBrandDecision,
+    Field(discriminator="action"),
+]
+
+
+class UseExistingProductDecision(StrictSchema):
+    action: Literal["use_existing"]
+    product_id: uuid.UUID
+
+
+class CreateNewProductDecision(StrictSchema):
+    action: Literal["create_new"]
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return clean_identity_display_name(value)
+
+
+ProductIdentityDecision = Annotated[
+    UseExistingProductDecision | CreateNewProductDecision,
+    Field(discriminator="action"),
+]
+
+
+class ExtractionIdentityResolutionRequest(StrictSchema):
+    extraction_run_id: uuid.UUID
+    brand: BrandIdentityDecision
+    product: ProductIdentityDecision
+
+
 class ProductExtractionJobPayload(StrictSchema):
     photo_ids: list[uuid.UUID] = Field(min_length=1)
     provider: NonEmptyText
@@ -186,6 +236,7 @@ class BrandCreate(BaseModel):
 class BrandRead(ReadSchema):
     id: uuid.UUID
     name: str
+    identity_key: str
     created_at: datetime
     updated_at: datetime
 
@@ -199,6 +250,7 @@ class ProductRead(ReadSchema):
     id: uuid.UUID
     brand_id: uuid.UUID
     name: str
+    identity_key: str
     created_at: datetime
     updated_at: datetime
 
@@ -270,6 +322,17 @@ class ExtractionFieldReviewRead(ReadSchema):
     corrected_value: dict[str, JsonValue] | None
     created_at: datetime
     applied_at: datetime | None
+
+
+class ExtractionIdentityResolutionRead(ReadSchema):
+    id: uuid.UUID
+    extraction_run_id: uuid.UUID
+    brand_id: uuid.UUID
+    product_id: uuid.UUID
+    brand_action: IdentityResolutionAction
+    product_action: IdentityResolutionAction
+    created_at: datetime
+    applied_at: datetime
 
 
 class PhotoCreate(BaseModel):

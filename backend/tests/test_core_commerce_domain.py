@@ -52,6 +52,7 @@ def test_entity_creation_relationships_and_read_schema(session: Session) -> None
     assert brand_read == BrandRead(
         id=sku.product.brand.id,
         name="Optimum Nutrition",
+        identity_key="optimum nutrition",
         created_at=sku.product.brand.created_at,
         updated_at=sku.product.brand.updated_at,
     )

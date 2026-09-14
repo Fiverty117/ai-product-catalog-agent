@@ -18,7 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
 from app.db.types import UTCDateTime, utc_now
@@ -28,10 +28,12 @@ from app.domain.enums import (
     ExtractionRunStatus,
     FieldSource,
     FieldState,
+    IdentityResolutionAction,
     JobStatus,
     PhotoRole,
     SKUFieldName,
 )
+from app.domain.identity import identity_key_v1
 
 
 extraction_run_photos = Table(
@@ -55,22 +57,48 @@ extraction_run_photos = Table(
 
 class Brand(Base):
     __tablename__ = "brands"
-    __table_args__ = (CheckConstraint("length(trim(name)) > 0", name="ck_brands_name_nonempty"),)
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="ck_brands_name_nonempty"),
+        CheckConstraint(
+            "length(identity_key) > 0",
+            name="ck_brands_identity_key_nonempty",
+        ),
+        UniqueConstraint("identity_key", name="uq_brands_identity_key"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    identity_key: Mapped[str] = mapped_column(String(512), nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now
     )
 
     products: Mapped[list["Product"]] = relationship(back_populates="brand")
+    identity_resolutions: Mapped[list["ExtractionIdentityResolution"]] = relationship(
+        back_populates="brand"
+    )
+
+    @validates("name")
+    def normalize_name(self, _key: str, value: str) -> str:
+        cleaned = " ".join(value.split())
+        self.identity_key = identity_key_v1(cleaned) if cleaned else ""
+        return cleaned
 
 
 class Product(Base):
     __tablename__ = "products"
     __table_args__ = (
         CheckConstraint("length(trim(name)) > 0", name="ck_products_name_nonempty"),
+        CheckConstraint(
+            "length(identity_key) > 0",
+            name="ck_products_identity_key_nonempty",
+        ),
+        UniqueConstraint(
+            "brand_id",
+            "identity_key",
+            name="uq_products_brand_identity_key",
+        ),
         Index("ix_products_brand_id", "brand_id"),
     )
 
@@ -79,6 +107,7 @@ class Product(Base):
         Uuid(as_uuid=True), ForeignKey("brands.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    identity_key: Mapped[str] = mapped_column(String(512), nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now
@@ -86,6 +115,15 @@ class Product(Base):
 
     brand: Mapped[Brand] = relationship(back_populates="products")
     skus: Mapped[list["SKU"]] = relationship(back_populates="product")
+    identity_resolutions: Mapped[list["ExtractionIdentityResolution"]] = relationship(
+        back_populates="product"
+    )
+
+    @validates("name")
+    def normalize_name(self, _key: str, value: str) -> str:
+        cleaned = " ".join(value.split())
+        self.identity_key = identity_key_v1(cleaned) if cleaned else ""
+        return cleaned
 
 
 class SKU(Base):
@@ -408,6 +446,10 @@ class ExtractionRun(Base):
     field_reviews: Mapped[list["ExtractionFieldReview"]] = relationship(
         back_populates="extraction_run"
     )
+    identity_resolution: Mapped["ExtractionIdentityResolution | None"] = relationship(
+        back_populates="extraction_run",
+        uselist=False,
+    )
 
 
 class ExtractionFieldReview(Base):
@@ -477,3 +519,58 @@ class ExtractionFieldReview(Base):
         back_populates="field_reviews"
     )
     sku: Mapped[SKU] = relationship(back_populates="extraction_field_reviews")
+
+
+class ExtractionIdentityResolution(Base):
+    __tablename__ = "extraction_identity_resolutions"
+    __table_args__ = (
+        UniqueConstraint(
+            "extraction_run_id",
+            name="uq_extraction_identity_resolutions_run",
+        ),
+        Index("ix_extraction_identity_resolutions_brand_id", "brand_id"),
+        Index("ix_extraction_identity_resolutions_product_id", "product_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    extraction_run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("extraction_runs.id"), nullable=False
+    )
+    brand_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("brands.id"), nullable=False
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("products.id"), nullable=False
+    )
+    brand_action: Mapped[IdentityResolutionAction] = mapped_column(
+        Enum(
+            IdentityResolutionAction,
+            name="brand_identity_resolution_action",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    product_action: Mapped[IdentityResolutionAction] = mapped_column(
+        Enum(
+            IdentityResolutionAction,
+            name="product_identity_resolution_action",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+    applied_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+    extraction_run: Mapped[ExtractionRun] = relationship(
+        back_populates="identity_resolution"
+    )
+    brand: Mapped[Brand] = relationship(back_populates="identity_resolutions")
+    product: Mapped[Product] = relationship(back_populates="identity_resolutions")
