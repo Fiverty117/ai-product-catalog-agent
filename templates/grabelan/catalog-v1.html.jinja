@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <title>{{ store_name }} - {{ title }}</title>
     <style>
-      @page { size: {{ page_size }} {{ orientation }}; margin: 14mm; }
+      @page { size: {{ page_size }} {{ orientation }}; margin: 12mm; }
       {{ stylesheet | safe }}
     </style>
   </head>
@@ -20,29 +20,34 @@
       </dl>
     </header>
 
-    <main>
+    {% set products_per_row = 2 %}
+    <main style="--products-per-row: {{ products_per_row }}">
       {% for section in sections %}
       <section class="category-section">
-        <h2>{{ section.category_name }}</h2>
-        <div class="product-grid">
-          {% for product in section.products %}
-          <article class="product-card">
-            <div class="product-image-frame">
-              <img src="{{ product.image_data_uri }}" alt="{{ product.product_name }}">
-            </div>
-            <div class="product-content">
-              <p class="product-brand">{{ product.brand_name }}</p>
-              <h3>{{ product.product_name }}</h3>
-              <ul class="variant-list">
-                {% for variant in product.variants %}
-                <li>
-                  {% if variant.label %}<span>{{ variant.label }}</span>{% endif %}
-                  <strong>{{ variant.price_display }}</strong>
-                </li>
-                {% endfor %}
-              </ul>
-            </div>
-          </article>
+        <h2 class="category-title">{{ section.category_name }}</h2>
+        <div class="product-rows">
+          {% for product_row in section.products | batch(products_per_row) %}
+          <div class="product-row">
+            {% for product in product_row %}
+            <article class="product-card">
+              <div class="product-image-frame">
+                <img src="{{ product.image_data_uri }}" alt="{{ product.product_name }}">
+              </div>
+              <div class="product-content">
+                <p class="product-brand">{{ product.brand_name }}</p>
+                <h3>{{ product.product_name }}</h3>
+                <ul class="variant-list">
+                  {% for variant in product.variants %}
+                  <li class="variant-row{% if not variant.label %} variant-row--price-only{% endif %}">
+                    {% if variant.label %}<span class="variant-label">{{ variant.label }}</span>{% endif %}
+                    <strong class="variant-price">{{ variant.price_display }}</strong>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
           {% endfor %}
         </div>
       </section>

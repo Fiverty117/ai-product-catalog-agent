@@ -259,6 +259,93 @@ def test_html_is_offline_escaped_and_contains_only_snapshot_content(
     assert 'class="logo"' not in rendered.casefold()
 
 
+def test_classic_template_handles_long_content_and_multiple_variants(
+    session: Session,
+) -> None:
+    product_name = (
+        "Organic Fermented Plant Protein with Naturally Cultured Ingredients"
+    )
+    long_variant = (
+        "Passion Fruit, Ginger and Botanical Blend / Family Presentation 2 kg"
+    )
+    data = snapshot_data(
+        session.info["storage_root"],
+        product_name=product_name,
+        brand_name="A Long but Valid Independent Producer Name",
+        category_name="Natural Foods, Ferments and Functional Pantry Staples",
+        variants=[
+            variant(flavor=long_variant),
+            variant(flavor="Vanilla", amount="123456789.0000"),
+            variant(),
+        ],
+    )
+    config = normalize_catalog_render_config()
+    view = build_catalog_render_view_model(
+        data,
+        config,
+        storage_root=session.info["storage_root"],
+    )
+    rendered = render_catalog_html(
+        view,
+        resolve_catalog_template(config.template_key, template_root=TEMPLATE_ROOT),
+    )
+    stylesheet = (TEMPLATE_ROOT / "catalog-v1.css").read_text(encoding="utf-8")
+
+    assert rendered.count('class="product-card"') == 1
+    assert rendered.count('class="variant-row') == 3
+    assert product_name in rendered
+    assert long_variant in rendered
+    assert 'class="variant-label"' in rendered
+    assert 'class="variant-price"' in rendered
+    assert "--surface:" in stylesheet and "--accent:" in stylesheet
+    assert "repeat(var(--products-per-row), minmax(0, 1fr))" in stylesheet
+    assert "break-inside: avoid-page" in stylesheet
+    assert "page-break-inside: avoid" in stylesheet
+
+
+def test_template_groups_ordered_products_into_print_safe_rows(
+    session: Session,
+) -> None:
+    data = snapshot_data(session.info["storage_root"])
+    config = normalize_catalog_render_config()
+    view = build_catalog_render_view_model(
+        data,
+        config,
+        storage_root=session.info["storage_root"],
+    )
+    first = view.sections[0].products[0]
+    products = [
+        first.model_copy(
+            update={
+                "source_product_id": uuid.uuid4(),
+                "product_name": f"Ordered Product {number}",
+            }
+        )
+        for number in range(1, 6)
+    ]
+    section = view.sections[0].model_copy(update={"products": products})
+    view = view.model_copy(update={"sections": [section]})
+    rendered = render_catalog_html(
+        view,
+        resolve_catalog_template(config.template_key, template_root=TEMPLATE_ROOT),
+    )
+    stylesheet = (TEMPLATE_ROOT / "catalog-v1.css").read_text(encoding="utf-8")
+    row_segments = rendered.split('<div class="product-row">')[1:]
+
+    assert '<main style="--products-per-row: 2">' in rendered
+    assert len(row_segments) == 3
+    assert [row.count('class="product-card"') for row in row_segments] == [2, 2, 1]
+    assert [rendered.index(f"Ordered Product {number}") for number in range(1, 6)] == sorted(
+        rendered.index(f"Ordered Product {number}") for number in range(1, 6)
+    )
+    assert 'class="product-grid"' not in rendered
+    assert "break-before: page" not in stylesheet
+    assert "break-after: avoid-page" in stylesheet
+    assert "page-break-after: avoid" in stylesheet
+    assert ".product-row" in stylesheet
+    assert "grid-template-columns: repeat(var(--products-per-row)" in stylesheet
+
+
 def test_template_registry_and_content_hash_track_css(tmp_path) -> None:
     copied = tmp_path / "template"
     shutil.copytree(TEMPLATE_ROOT, copied)

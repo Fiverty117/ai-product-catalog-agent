@@ -37,3 +37,4 @@ storage/catalogs/*
 # Local outputs
 coverage.xml
 htmlcov/
+tmp/
