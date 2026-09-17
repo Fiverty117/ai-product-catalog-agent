@@ -42,6 +42,9 @@
               <div class="product-content">
                 <p class="product-brand">{{ product.brand_name }}</p>
                 <h3>{{ product.product_name }}</h3>
+                {% if product.short_description and layout.key != "compact" %}
+                <p class="product-description">{{ product.short_description }}</p>
+                {% endif %}
                 <ul class="variant-list">
                   {% for variant in product.variants %}
                   <li class="variant-row{% if not variant.label %} variant-row--price-only{% endif %}">

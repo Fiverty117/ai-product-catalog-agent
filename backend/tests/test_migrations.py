@@ -38,9 +38,126 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "prices",
         "products",
         "product_categories",
+        "product_copy_reviews",
+        "product_copy_runs",
         "skus",
         "sku_field_provenance",
     }
+    engine.dispose()
+    command.check(config)
+
+
+def test_0018_preserves_0017_catalog_history_and_adds_copy_constraints(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "product-copy-migration.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "20260924_0017")
+
+    engine = create_engine(f"sqlite:///{database_path}")
+    ids = {
+        "brand": "1" * 32,
+        "product": "2" * 32,
+        "snapshot": "3" * 32,
+        "render": "4" * 32,
+        "artifact": "5" * 32,
+    }
+    timestamp = "2026-09-25 00:00:00.000000"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO brands (id, name, identity_key, created_at, updated_at) "
+                "VALUES (:brand, 'Legacy Brand', 'legacy brand', :at, :at)"
+            ),
+            {**ids, "at": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO products (id, brand_id, name, identity_key, created_at, updated_at) "
+                "VALUES (:product, :brand, 'Legacy Product', 'legacy product', :at, :at)"
+            ),
+            {**ids, "at": timestamp},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO catalog_snapshots (id, schema_version, currency, as_of, payload, "
+                "content_hash, created_at) VALUES (:snapshot, 'catalog-snapshot-v1', 'PYG', "
+                ":at, '{}', :hash, :at)"
+            ),
+            {**ids, "at": timestamp, "hash": "a" * 64},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO catalog_render_runs (id, catalog_snapshot_id, template_key, "
+                "template_version, template_hash, renderer_version, renderer_engine, locale, "
+                "config_hash, layout_key, layout_version, status, started_at, completed_at, "
+                "created_at) VALUES (:render, :snapshot, 'grabelan-catalog-v1', '1.0', :template_hash, "
+                "'catalog-chromium-v2', 'chromium', 'es-PY', :config_hash, 'classic', '1', "
+                "'succeeded', :at, :at, :at)"
+            ),
+            {
+                **ids,
+                "at": timestamp,
+                "template_hash": "b" * 64,
+                "config_hash": "c" * 64,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO catalog_artifacts (id, catalog_snapshot_id, render_run_id, media_type, "
+                "file_path, checksum_sha256, file_size_bytes, page_count, created_at) VALUES "
+                "(:artifact, :snapshot, :render, 'application/pdf', 'storage/catalogs/legacy.pdf', "
+                ":checksum, 100, 1, :at)"
+            ),
+            {**ids, "at": timestamp, "checksum": "d" * 64},
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{database_path}")
+    inspector = inspect(engine)
+    assert {"product_copy_runs", "product_copy_reviews"} <= set(
+        inspector.get_table_names()
+    )
+    assert {
+        "ix_product_copy_runs_product_id",
+        "ix_product_copy_runs_job_id",
+        "ix_product_copy_runs_source_fingerprint",
+    } == {index["name"] for index in inspector.get_indexes("product_copy_runs")}
+    assert "uq_product_copy_reviews_run" in {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("product_copy_reviews")
+    }
+    run_checks = {
+        constraint["name"]
+        for constraint in inspector.get_check_constraints("product_copy_runs")
+    }
+    review_checks = {
+        constraint["name"]
+        for constraint in inspector.get_check_constraints("product_copy_reviews")
+    }
+    assert {
+        "product_copy_type",
+        "product_copy_run_status",
+        "ck_product_copy_runs_source_fingerprint_format",
+        "ck_product_copy_runs_generated_text_length",
+    } <= run_checks
+    assert {
+        "product_copy_review_decision",
+        "ck_product_copy_reviews_corrected_text",
+        "ck_product_copy_reviews_corrected_text_length",
+        "ck_product_copy_reviews_applied_at",
+    } <= review_checks
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM brands")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM products")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM catalog_snapshots")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM catalog_render_runs")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM catalog_artifacts")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM product_copy_runs")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM product_copy_reviews")) == 0
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
     engine.dispose()
     command.check(config)
 

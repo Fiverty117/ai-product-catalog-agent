@@ -98,6 +98,11 @@ def build_stress_view_model(
                     "[QA] Producto de prueba con proteína vegetal fermentada, "
                     "ingredientes cultivados y un nombre comercial muy largo"
                 ),
+                short_description=(
+                    "Producto sintético para revisar una descripción extensa junto "
+                    "a un nombre largo y seis variantes, sin perder la jerarquía "
+                    "visual del precio ni fragmentar la tarjeta."
+                ),
                 image_shape="portrait",
                 variants=[
                     ("Vainilla clásica / 500 g", "Gs. 180.000"),
@@ -115,6 +120,7 @@ def build_stress_view_model(
                 "square-companion",
                 brand="[QA] Marca cuadrada de prueba",
                 name="[QA] Producto de prueba en envase cuadrado",
+                short_description="Descripción breve de prueba.",
                 image_shape="square",
                 variants=[("Natural / 250 g", "Gs. 72.500")],
             ),
@@ -130,6 +136,7 @@ def build_stress_view_model(
                     "flour",
                     brand="[QA] Molino de prueba",
                     name="[QA] Harina integral de prueba",
+                    short_description=None,
                     image_shape="portrait",
                     variants=[("Bolsa / 1 kg", "Gs. 18.900")],
                 ),
@@ -137,6 +144,11 @@ def build_stress_view_model(
                     "fruit",
                     brand="[QA] Frutos de laboratorio visual",
                     name="[QA] Fruta deshidratada de prueba",
+                    short_description=(
+                        "Descripción de prueba cercana al máximo permitido para "
+                        "comprobar que el texto completo se ajuste con seguridad, "
+                        "mantenga un ritmo legible y no desplace ni oculte el precio."
+                    ),
                     image_shape="square",
                     variants=[("Mix tropical / 350 g", "Gs. 44.500")],
                 ),
@@ -150,6 +162,7 @@ def build_stress_view_model(
                     "kombucha",
                     brand="[QA] Fermentos de prueba",
                     name="[QA] Kombucha sintética para control de diseño",
+                    short_description="Bebida sintética usada solo para QA visual.",
                     image_shape="portrait",
                     variants=[("Jengibre / 330 ml", "Gs. 16.000")],
                 ),
@@ -157,6 +170,7 @@ def build_stress_view_model(
                     "yogurt",
                     brand="[QA] Lácteos de maqueta",
                     name="[QA] Yogur natural de prueba",
+                    short_description=None,
                     image_shape="square",
                     variants=[("Natural / 500 g", "Gs. 24.000")],
                 ),
@@ -169,6 +183,11 @@ def build_stress_view_model(
             f"density-{number}",
             brand=f"[QA] Marca sintética {number}",
             name=f"[QA] Producto de prueba para densidad y paginación {number}",
+            short_description=(
+                f"Descripción sintética de densidad {number}."
+                if number % 3 == 0
+                else None
+            ),
             image_shape="portrait" if number % 2 else "square",
             variants=[
                 (
@@ -234,6 +253,7 @@ def _product(
     *,
     brand: str,
     name: str,
+    short_description: str | None,
     image_shape: Literal["portrait", "square"],
     variants: list[tuple[str | None, str]],
 ) -> CatalogRenderProductView:
@@ -241,6 +261,7 @@ def _product(
         source_product_id=_qa_uuid(f"product:{key}"),
         brand_name=brand,
         product_name=name,
+        short_description=short_description,
         image_data_uri=_fixture_image_data_uri(image_shape, key),
         variants=[
             CatalogRenderVariantView(

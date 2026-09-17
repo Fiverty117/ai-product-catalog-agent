@@ -19,6 +19,8 @@ from app.db import (
     Price,
     Product,
     ProductCategory,
+    ProductCopyReview,
+    ProductCopyRun,
     SKU,
 )
 from app.db.session import create_sqlite_engine
@@ -190,6 +192,8 @@ def test_ready_product_and_dimensionless_sku_need_no_ai_history(
     assert session.scalar(select(func.count()).select_from(ExtractionFieldReview)) == 0
     assert session.scalar(select(func.count()).select_from(CategorySuggestionRun)) == 0
     assert session.scalar(select(func.count()).select_from(CategorySuggestionReview)) == 0
+    assert session.scalar(select(func.count()).select_from(ProductCopyRun)) == 0
+    assert session.scalar(select(func.count()).select_from(ProductCopyReview)) == 0
 
 
 def test_missing_inactive_and_secondary_only_category_diagnostics(

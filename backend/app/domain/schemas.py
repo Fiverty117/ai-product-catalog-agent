@@ -5,6 +5,7 @@ from typing import Annotated, Any, Generic, Literal, TypeVar
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     JsonValue,
@@ -35,9 +36,13 @@ from app.domain.enums import (
     PhotoPresentationAssetType,
     PhotoPresentationWarning,
     PhotoRole,
+    ProductCopyResolutionState,
+    ProductCopyReviewDecision,
+    ProductCopyType,
     SKUFieldName,
 )
 from app.domain.identity import clean_identity_display_name
+from app.domain.product_copy import normalize_product_short_description
 
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -72,6 +77,11 @@ CategorySuggestionConfidence = Annotated[
 CategoryEvidence = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
+]
+ProductShortDescription = Annotated[
+    str,
+    BeforeValidator(normalize_product_short_description),
+    StringConstraints(min_length=1, max_length=180),
 ]
 ObservationServings = Annotated[int, Field(gt=0)]
 ObservationValue = TypeVar("ObservationValue")
@@ -269,6 +279,105 @@ class CategorySuggestionJobPayload(StrictSchema):
         cls, value: dict[str, JsonValue]
     ) -> dict[str, JsonValue]:
         return _reject_sensitive_parameters(value)
+
+
+class ProductCopyCategorySnapshot(StrictSchema):
+    category_id: uuid.UUID
+    name: ObservationText
+
+
+class ProductCopyVariantSnapshot(StrictSchema):
+    sku_id: uuid.UUID
+    flavor: ObservationText | None = None
+    size_value: Decimal | None = Field(
+        default=None, gt=0, max_digits=18, decimal_places=6
+    )
+    size_unit: ObservationText | None = None
+    servings: int | None = Field(default=None, gt=0)
+
+    @field_serializer("size_value")
+    def serialize_size_value(self, value: Decimal | None) -> str | None:
+        return _canonical_decimal_string(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def require_complete_size_pair(self):
+        if (self.size_value is None) != (self.size_unit is None):
+            raise ValueError("size_value and size_unit must be set together")
+        return self
+
+
+class ProductCopyInputSnapshot(StrictSchema):
+    product_id: uuid.UUID
+    brand_name: ObservationText
+    product_name: ObservationText
+    primary_category: ProductCopyCategorySnapshot | None = None
+    secondary_categories: list[ProductCopyCategorySnapshot]
+    variants: list[ProductCopyVariantSnapshot]
+
+
+class ProductCopyResult(StrictSchema):
+    short_description: ProductShortDescription
+
+
+class ProductCopyJobPayload(StrictSchema):
+    product_id: uuid.UUID
+    copy_type: Literal["short_description"]
+    provider: NonEmptyText
+    model: NonEmptyText
+    prompt_version: NonEmptyText
+    schema_version: NonEmptyText
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    source_fingerprint: Sha256
+    input_snapshot: ProductCopyInputSnapshot
+
+    @field_validator("parameters")
+    @classmethod
+    def reject_sensitive_parameters(
+        cls, value: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        return _reject_sensitive_parameters(value)
+
+
+class ProductCopyReviewRequest(StrictSchema):
+    product_copy_run_id: uuid.UUID
+    decision: ProductCopyReviewDecision
+    corrected_short_description: ProductShortDescription | None = None
+
+    @model_validator(mode="after")
+    def validate_decision_contract(self):
+        if self.decision is ProductCopyReviewDecision.CORRECTED:
+            if self.corrected_short_description is None:
+                raise ValueError("corrected review requires short_description")
+        elif self.corrected_short_description is not None:
+            raise ValueError("only corrected review may include corrected text")
+        return self
+
+
+class EffectiveProductCopy(StrictSchema):
+    product_id: uuid.UUID
+    state: ProductCopyResolutionState
+    short_description: ProductShortDescription | None
+    product_copy_run_id: uuid.UUID | None
+    product_copy_review_id: uuid.UUID | None
+    source_fingerprint: Sha256 | None
+
+    @model_validator(mode="after")
+    def validate_resolution(self):
+        values = (
+            self.short_description,
+            self.product_copy_run_id,
+            self.product_copy_review_id,
+            self.source_fingerprint,
+        )
+        if self.state is ProductCopyResolutionState.NONE and any(
+            value is not None for value in values
+        ):
+            raise ValueError("no-copy resolution cannot contain copy lineage")
+        if self.state is not ProductCopyResolutionState.NONE and any(
+            value is None for value in values
+        ):
+            raise ValueError("resolved copy requires complete lineage")
+        return self
 
 
 class ImageEnhancementJobPayload(StrictSchema):
@@ -501,6 +610,7 @@ class CatalogProductSnapshot(StrictSchema):
     source_product_id: uuid.UUID
     product_name: NonEmptyText
     product_identity_key: NonEmptyText
+    short_description: ProductShortDescription | None = None
     hero: CatalogHeroSnapshot
     variants: Annotated[list[CatalogVariantSnapshot], Field(min_length=1)]
 
@@ -744,6 +854,36 @@ class CategorySuggestionReviewRead(ReadSchema):
     category_suggestion_run_id: uuid.UUID
     decision: CategorySuggestionReviewDecision
     final_selection: CategorySelection | None
+    created_at: datetime
+    applied_at: datetime | None
+
+
+class ProductCopyRunRead(ReadSchema):
+    id: uuid.UUID
+    product_id: uuid.UUID
+    job_id: uuid.UUID | None
+    copy_type: ProductCopyType
+    provider: str
+    model: str
+    prompt_version: str
+    schema_version: str
+    parameters: dict[str, JsonValue]
+    source_fingerprint: str
+    input_snapshot: ProductCopyInputSnapshot
+    status: ExtractionRunStatus
+    generated_text: ProductShortDescription | None
+    usage: dict[str, JsonValue] | None
+    sanitized_error: str | None
+    started_at: datetime
+    completed_at: datetime | None
+    created_at: datetime
+
+
+class ProductCopyReviewRead(ReadSchema):
+    id: uuid.UUID
+    product_copy_run_id: uuid.UUID
+    decision: ProductCopyReviewDecision
+    corrected_short_description: ProductShortDescription | None
     created_at: datetime
     applied_at: datetime | None
 
@@ -1193,6 +1333,7 @@ class CatalogRenderProductView(StrictSchema):
     source_product_id: uuid.UUID
     brand_name: NonEmptyText
     product_name: NonEmptyText
+    short_description: ProductShortDescription | None = None
     image_data_uri: NonEmptyText
     variants: Annotated[list[CatalogRenderVariantView], Field(min_length=1)]
 

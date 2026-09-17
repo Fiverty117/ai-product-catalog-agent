@@ -22,11 +22,13 @@ from app.db import (
     Price,
     Product,
     ProductCategory,
+    ProductCopyRun,
     SKU,
 )
 from app.db.session import create_sqlite_engine
 from app.domain.enums import (
     DerivedImageReviewDecision,
+    ProductCopyReviewDecision,
     PhotoPresentationAssetType,
     PhotoRole,
 )
@@ -34,6 +36,7 @@ from app.domain.schemas import (
     CatalogSnapshotCreate,
     DerivedImageReviewCreate,
     ImageEnhancementJobPayload,
+    ProductCopyReviewRequest,
 )
 from app.services.catalog_snapshots import (
     CatalogSnapshotAssetIntegrityError,
@@ -56,6 +59,14 @@ from app.services.image_presentation import (
     use_original_photo_presentation,
 )
 from app.services.photo_intake import register_original_photo
+from app.services.product_copy import (
+    build_product_copy_input_snapshot,
+    build_product_copy_source_fingerprint,
+    create_running_product_copy_run,
+    mark_product_copy_run_succeeded,
+)
+from app.services.product_copy_review import apply_product_copy_review
+from app.domain.schemas import ProductCopyJobPayload
 
 
 AS_OF = datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
@@ -183,6 +194,49 @@ def create_snapshot(
             **request_values,
         ),
         storage_root=session.info["storage_root"],
+    )
+
+
+def make_copy_run(
+    session: Session,
+    product: Product,
+    text: str,
+) -> ProductCopyRun:
+    input_snapshot = build_product_copy_input_snapshot(session, product.id)
+    payload = ProductCopyJobPayload(
+        product_id=product.id,
+        copy_type="short_description",
+        provider="openai",
+        model="gpt-5.6-sol",
+        prompt_version="product-copy-v1",
+        schema_version="product-copy-result-v1",
+        parameters={"reasoning_effort": "low"},
+        source_fingerprint=build_product_copy_source_fingerprint(input_snapshot),
+        input_snapshot=input_snapshot,
+    )
+    run = create_running_product_copy_run(session, payload=payload, started_at=AS_OF)
+    return mark_product_copy_run_succeeded(
+        session,
+        run,
+        structured_result={"short_description": text},
+        completed_at=AS_OF,
+    )
+
+
+def review_copy(
+    session: Session,
+    run: ProductCopyRun,
+    decision: ProductCopyReviewDecision,
+    corrected: str | None = None,
+):
+    return apply_product_copy_review(
+        session,
+        ProductCopyReviewRequest(
+            product_copy_run_id=run.id,
+            decision=decision,
+            corrected_short_description=corrected,
+        ),
+        applied_at=AS_OF,
     )
 
 
@@ -619,3 +673,108 @@ def test_snapshot_creation_does_not_mutate_canonical_rows(session: Session) -> N
         prices[0].amount,
         photo.file_path,
     )
+
+
+def test_snapshot_includes_only_current_human_reviewed_product_copy(
+    session: Session,
+) -> None:
+    approved_product, *_ = make_ready_product(session, product_name="Approved")
+    corrected_product, *_ = make_ready_product(session, product_name="Corrected")
+    pending_product, *_ = make_ready_product(session, product_name="Pending")
+    rejected_product, *_ = make_ready_product(session, product_name="Rejected")
+    stale_product, *_ = make_ready_product(session, product_name="Stale")
+    no_copy_product, *_ = make_ready_product(session, product_name="No Copy")
+
+    review_copy(
+        session,
+        make_copy_run(session, approved_product, "Descripcion aprobada vigente."),
+        ProductCopyReviewDecision.APPROVED,
+    )
+    review_copy(
+        session,
+        make_copy_run(session, corrected_product, "Propuesta original."),
+        ProductCopyReviewDecision.CORRECTED,
+        "Descripcion corregida por una persona.",
+    )
+    make_copy_run(session, pending_product, "Propuesta aun no revisada.")
+    review_copy(
+        session,
+        make_copy_run(session, rejected_product, "Propuesta rechazada."),
+        ProductCopyReviewDecision.REJECTED,
+    )
+    review_copy(
+        session,
+        make_copy_run(session, stale_product, "Descripcion aprobada antigua."),
+        ProductCopyReviewDecision.APPROVED,
+    )
+    stale_product.name = "Stale renamed after review"
+    session.flush()
+
+    snapshot = create_snapshot(
+        session,
+        [
+            approved_product.id,
+            corrected_product.id,
+            pending_product.id,
+            rejected_product.id,
+            stale_product.id,
+            no_copy_product.id,
+        ],
+    )
+    descriptions = {
+        product["product_name"]: product.get("short_description")
+        for section in snapshot.payload["sections"]
+        for product in section["products"]
+    }
+
+    assert descriptions["Approved"] == "Descripcion aprobada vigente."
+    assert descriptions["Corrected"] == "Descripcion corregida por una persona."
+    assert descriptions["Pending"] is None
+    assert descriptions["Rejected"] is None
+    assert descriptions["Stale renamed after review"] is None
+    assert descriptions["No Copy"] is None
+
+
+def test_pre_block9_snapshot_payload_without_description_remains_readable(
+    session: Session,
+) -> None:
+    product, *_ = make_ready_product(session)
+    snapshot = create_snapshot(session, [product.id])
+    old_style_payload = json.loads(json.dumps(snapshot.payload))
+    old_style_payload["sections"][0]["products"][0].pop("short_description")
+    snapshot.payload = old_style_payload
+    session.flush()
+
+    data = read_catalog_snapshot_data(session, snapshot.id)
+
+    assert data.sections[0].products[0].short_description is None
+    assert snapshot.content_hash == hashlib.sha256(
+        canonical_catalog_snapshot_json(data).encode("utf-8")
+    ).hexdigest()
+
+
+def test_reviewed_copy_change_changes_new_snapshot_hash(session: Session) -> None:
+    product, *_ = make_ready_product(session)
+    first_run = make_copy_run(session, product, "Primera descripcion aprobada.")
+    first_review = review_copy(
+        session, first_run, ProductCopyReviewDecision.APPROVED
+    )
+    first_review.created_at = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
+    session.flush()
+    first_snapshot = create_snapshot(session, [product.id])
+
+    second_run = make_copy_run(session, product, "Segunda descripcion corregida.")
+    second_review = review_copy(
+        session,
+        second_run,
+        ProductCopyReviewDecision.CORRECTED,
+        "Segunda descripcion humana.",
+    )
+    second_review.created_at = datetime(2026, 9, 20, 11, 0, tzinfo=timezone.utc)
+    session.flush()
+    second_snapshot = create_snapshot(session, [product.id])
+
+    assert first_snapshot.content_hash != second_snapshot.content_hash
+    assert second_snapshot.payload["sections"][0]["products"][0][
+        "short_description"
+    ] == "Segunda descripcion humana."

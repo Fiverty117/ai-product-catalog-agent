@@ -105,6 +105,48 @@ def test_all_layouts_preserve_identical_catalog_and_branding_content() -> None:
         assert f"layout-{key}" in html
 
 
+def test_descriptions_render_fully_in_classic_and_dense_but_not_compact() -> None:
+    rendered = {}
+    descriptions = None
+    for key in ("classic", "dense", "compact"):
+        view = build_stress_view_model(CatalogRenderConfig(layout=key))
+        current_descriptions = [
+            product.short_description
+            for section in view.sections
+            for product in section.products
+            if product.short_description is not None
+        ]
+        descriptions = descriptions or current_descriptions
+        assert current_descriptions == descriptions
+        rendered[key] = render_catalog_html(
+            view,
+            resolve_catalog_template(
+                view_model_template_key(), template_root=TEMPLATE_ROOT
+            ),
+        )
+
+    assert descriptions
+    near_limit = max(descriptions, key=len)
+    assert 170 <= len(near_limit) <= 180
+    for description in descriptions:
+        assert description in rendered["classic"]
+        assert description in rendered["dense"]
+        assert description not in rendered["compact"]
+    assert rendered["classic"].count('class="product-description"') == len(
+        descriptions
+    )
+    assert rendered["dense"].count('class="product-description"') == len(
+        descriptions
+    )
+    assert 'class="product-description"' not in rendered["compact"]
+
+    six_variant_product = build_stress_view_model(
+        CatalogRenderConfig(layout="classic")
+    ).sections[0].products[0]
+    assert len(six_variant_product.variants) == 6
+    assert six_variant_product.short_description in rendered["classic"]
+
+
 def test_layout_css_tunes_dense_and_compact_without_changing_classic_base() -> None:
     stylesheet = (TEMPLATE_ROOT / "catalog-v1.css").read_text(encoding="utf-8")
 

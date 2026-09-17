@@ -485,6 +485,7 @@ def build_catalog_render_view_model(
                     source_product_id=product.source_product_id,
                     brand_name=product.brand_name,
                     product_name=product.product_name,
+                    short_description=product.short_description,
                     image_data_uri=(
                         f"data:{product.hero.presentation_asset.mime_type};base64,"
                         + base64.b64encode(content).decode("ascii")

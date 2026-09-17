@@ -97,6 +97,22 @@ class CategorySuggestionReviewDecision(str, enum.Enum):
     REJECTED = "rejected"
 
 
+class ProductCopyType(str, enum.Enum):
+    SHORT_DESCRIPTION = "short_description"
+
+
+class ProductCopyReviewDecision(str, enum.Enum):
+    APPROVED = "approved"
+    CORRECTED = "corrected"
+    REJECTED = "rejected"
+
+
+class ProductCopyResolutionState(str, enum.Enum):
+    CURRENT = "current"
+    STALE = "stale"
+    NONE = "none"
+
+
 class CatalogReadinessIssueCode(str, enum.Enum):
     MISSING_PRIMARY_CATEGORY = "missing_primary_category"
     INACTIVE_PRIMARY_CATEGORY = "inactive_primary_category"

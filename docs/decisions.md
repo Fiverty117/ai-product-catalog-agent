@@ -186,3 +186,10 @@
 **Decision:** `catalog.render.v2` selects exactly one built-in layout (`classic`, `dense` or `compact`) through a typed application registry. The layout key and semantic version participate explicitly in Job identity and are copied to nullable CatalogRenderRun audit fields; older runs remain readable with null layout audit. All layouts share the versioned catalog-v1 Jinja/CSS template and ProductRow pagination, while the registry supplies stable row geometry and a CSS modifier class.
 
 **Why:** Layout changes presentation density without changing frozen catalog content or publisher branding. Explicit semantic identity prevents different layouts from deduplicating into one Job, and separate template hashing still captures exact implementation bytes.
+
+---
+
+## ADR-028 — Product copy is reviewed, source-sensitive snapshot content
+**Decision:** `product.copy.v1` freezes a narrow typed set of canonical Brand, Product, active Category and SKU presentation facts, excluding Price, media and render configuration. Each provider attempt is an immutable ProductCopyRun. An append-only human review approves, corrects or rejects exactly one proposal; AI output never updates Product. The effective-copy resolver compares the run's canonical source fingerprint with current facts and distinguishes current, stale and absent copy. CatalogSnapshot includes only current approved/corrected text. Missing `short_description` remains null under `catalog-snapshot-v1`, and canonical hashing omits that newly optional null field to preserve pre-Block-9 hashes. Classic and Dense render frozen copy; Compact omits it.
+
+**Why:** Commercial copy benefits from model drafting but must remain factual, explicitly reviewed and reproducible. Separating immutable proposal, human decision and deterministic freshness prevents stale or unreviewed text from entering publication while keeping descriptions optional for readiness and historical snapshots backward-readable.

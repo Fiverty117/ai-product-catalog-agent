@@ -34,6 +34,8 @@ from app.domain.enums import (
     IdentityResolutionAction,
     JobStatus,
     PhotoRole,
+    ProductCopyReviewDecision,
+    ProductCopyType,
     SKUFieldName,
 )
 from app.domain.identity import identity_key_v1
@@ -123,6 +125,9 @@ class Product(Base):
         back_populates="product"
     )
     category_suggestion_runs: Mapped[list["CategorySuggestionRun"]] = relationship(
+        back_populates="product"
+    )
+    product_copy_runs: Mapped[list["ProductCopyRun"]] = relationship(
         back_populates="product"
     )
     identity_resolutions: Mapped[list["ExtractionIdentityResolution"]] = relationship(
@@ -519,6 +524,9 @@ class Job(Base):
     catalog_render_runs: Mapped[list["CatalogRenderRun"]] = relationship(
         back_populates="job"
     )
+    product_copy_runs: Mapped[list["ProductCopyRun"]] = relationship(
+        back_populates="job"
+    )
 
 
 class ExtractionRun(Base):
@@ -841,6 +849,145 @@ class CategorySuggestionReview(Base):
     applied_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
     category_suggestion_run: Mapped[CategorySuggestionRun] = relationship(
+        back_populates="review"
+    )
+
+
+class ProductCopyRun(Base):
+    __tablename__ = "product_copy_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(provider)) > 0",
+            name="ck_product_copy_runs_provider_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(model)) > 0",
+            name="ck_product_copy_runs_model_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(prompt_version)) > 0",
+            name="ck_product_copy_runs_prompt_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(schema_version)) > 0",
+            name="ck_product_copy_runs_schema_version_nonempty",
+        ),
+        CheckConstraint(
+            "length(source_fingerprint) = 64 "
+            "AND source_fingerprint NOT GLOB '*[^0-9a-fA-F]*'",
+            name="ck_product_copy_runs_source_fingerprint_format",
+        ),
+        CheckConstraint(
+            "generated_text IS NULL OR "
+            "(length(trim(generated_text)) > 0 AND length(generated_text) <= 180)",
+            name="ck_product_copy_runs_generated_text_length",
+        ),
+        Index("ix_product_copy_runs_product_id", "product_id"),
+        Index("ix_product_copy_runs_job_id", "job_id"),
+        Index("ix_product_copy_runs_source_fingerprint", "source_fingerprint"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("products.id"), nullable=False
+    )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("jobs.id")
+    )
+    copy_type: Mapped[ProductCopyType] = mapped_column(
+        Enum(
+            ProductCopyType,
+            name="product_copy_type",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    status: Mapped[ExtractionRunStatus] = mapped_column(
+        Enum(
+            ExtractionRunStatus,
+            name="product_copy_run_status",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+        default=ExtractionRunStatus.RUNNING,
+    )
+    generated_text: Mapped[str | None] = mapped_column(Text)
+    usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    sanitized_error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+
+    product: Mapped[Product] = relationship(back_populates="product_copy_runs")
+    job: Mapped[Job | None] = relationship(back_populates="product_copy_runs")
+    review: Mapped["ProductCopyReview | None"] = relationship(
+        back_populates="product_copy_run", uselist=False
+    )
+
+
+class ProductCopyReview(Base):
+    __tablename__ = "product_copy_reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "(decision = 'corrected' AND corrected_short_description IS NOT NULL) OR "
+            "(decision IN ('approved', 'rejected') "
+            "AND corrected_short_description IS NULL)",
+            name="ck_product_copy_reviews_corrected_text",
+        ),
+        CheckConstraint(
+            "corrected_short_description IS NULL OR "
+            "(length(trim(corrected_short_description)) > 0 "
+            "AND length(corrected_short_description) <= 180)",
+            name="ck_product_copy_reviews_corrected_text_length",
+        ),
+        CheckConstraint(
+            "(decision = 'rejected' AND applied_at IS NULL) OR "
+            "(decision IN ('approved', 'corrected') AND applied_at IS NOT NULL)",
+            name="ck_product_copy_reviews_applied_at",
+        ),
+        UniqueConstraint(
+            "product_copy_run_id", name="uq_product_copy_reviews_run"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    product_copy_run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("product_copy_runs.id"), nullable=False
+    )
+    decision: Mapped[ProductCopyReviewDecision] = mapped_column(
+        Enum(
+            ProductCopyReviewDecision,
+            name="product_copy_review_decision",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        nullable=False,
+    )
+    corrected_short_description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+    product_copy_run: Mapped[ProductCopyRun] = relationship(
         back_populates="review"
     )
 

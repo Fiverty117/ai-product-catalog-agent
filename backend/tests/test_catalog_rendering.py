@@ -117,6 +117,7 @@ def snapshot_data(
     product_name="Premium Whey",
     brand_name="Landerfit",
     category_name="Suplementos",
+    short_description=None,
     variants=None,
     asset=None,
 ) -> CatalogSnapshotData:
@@ -137,6 +138,7 @@ def snapshot_data(
         source_product_id=uuid.uuid4(),
         product_name=product_name,
         product_identity_key=product_name.casefold(),
+        short_description=short_description,
         hero=hero,
         variants=variants or [variant()],
     )
@@ -196,6 +198,7 @@ def test_view_model_preserves_sections_groups_variants_and_formats_decimal(
 ) -> None:
     data = snapshot_data(
         session.info["storage_root"],
+        short_description="Descripcion congelada para el catalogo.",
         variants=[
             variant(flavor="Vanilla"),
             variant(size_value="250.500000", size_unit="g"),
@@ -221,6 +224,7 @@ def test_view_model_preserves_sections_groups_variants_and_formats_decimal(
     assert all(item.price_display for item in product.variants)
     assert "180.000" in product.variants[0].price_display
     assert view.currency == "PYG"
+    assert product.short_description == "Descripcion congelada para el catalogo."
     assert product.image_data_uri.startswith("data:image/png;base64,")
 
 
@@ -234,6 +238,7 @@ def test_html_is_offline_escaped_and_contains_only_snapshot_content(
         product_name=product_name,
         brand_name="Brand <unsafe>",
         category_name=category_name,
+        short_description="Texto congelado & seguro.",
         variants=[variant(flavor="Vanilla"), variant(flavor="Chocolate")],
     )
     config = normalize_catalog_render_config()
@@ -249,6 +254,7 @@ def test_html_is_offline_escaped_and_contains_only_snapshot_content(
     assert str(escape(product_name)) in rendered
     assert "Brand &lt;unsafe&gt;" in rendered
     assert "Nutrition &amp; Wellness" in rendered
+    assert "Texto congelado &amp; seguro." in rendered
     assert rendered.count('class="product-card"') == 1
     assert "Vanilla" in rendered and "Chocolate" in rendered
     assert "beneficio" not in rendered.casefold()
@@ -300,6 +306,7 @@ def test_classic_template_handles_long_content_and_multiple_variants(
     assert "--surface:" in stylesheet and "--accent:" in stylesheet
     assert "repeat(var(--products-per-row), minmax(0, 1fr))" in stylesheet
     assert "break-inside: avoid-page" in stylesheet
+    assert "display: inline-grid" in stylesheet
     assert "page-break-inside: avoid" in stylesheet
 
 

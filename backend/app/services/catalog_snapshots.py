@@ -28,6 +28,7 @@ from app.domain.enums import (
     CatalogHeroPhotoSource,
     PhotoPresentationAssetType,
     PhotoRole,
+    ProductCopyResolutionState,
 )
 from app.domain.schemas import (
     CatalogHeroSnapshot,
@@ -45,6 +46,7 @@ from app.domain.schemas import (
 from app.domain.sku_variants import normalize_variant_text
 from app.services.catalog_readiness import evaluate_product_catalog_readiness
 from app.services.photo_intake import PhotoIntakeError, inspect_supported_image
+from app.services.product_copy_review import resolve_effective_product_copy
 
 CATALOG_SNAPSHOT_SCHEMA_VERSION = "catalog-snapshot-v1"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -186,8 +188,15 @@ def read_catalog_snapshot_data(
 
 
 def canonical_catalog_snapshot_json(data: CatalogSnapshotData) -> str:
+    values = data.model_dump(mode="json")
+    # Block 9 keeps catalog-snapshot-v1 backward-readable. Omitting only this
+    # newly optional null field reproduces hashes created before it existed.
+    for section in values["sections"]:
+        for product in section["products"]:
+            if product["short_description"] is None:
+                product.pop("short_description")
     return json.dumps(
-        data.model_dump(mode="json"),
+        values,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -248,6 +257,7 @@ def _freeze_product(
         )
         for sku in sorted(included_skus, key=_sku_sort_key)
     ]
+    effective_copy = resolve_effective_product_copy(session, product.id)
     return _FrozenProduct(
         category=FrozenCatalogCategory(
             source_category_id=category.id,
@@ -262,6 +272,11 @@ def _freeze_product(
             source_product_id=product.id,
             product_name=product.name,
             product_identity_key=product.identity_key,
+            short_description=(
+                effective_copy.short_description
+                if effective_copy.state is ProductCopyResolutionState.CURRENT
+                else None
+            ),
             hero=_freeze_hero(
                 session,
                 product=product,
