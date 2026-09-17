@@ -2,17 +2,24 @@
 <html lang="{{ locale }}">
   <head>
     <meta charset="utf-8">
-    <title>{{ store_name }} - {{ title }}</title>
+    <title>{{ branding.display_name if branding else store_name }} - {{ title }}</title>
     <style>
       @page { size: {{ page_size }} {{ orientation }}; margin: 12mm; }
       {{ stylesheet | safe }}
     </style>
   </head>
-  <body>
+  <body{% if branding %} style="--brand-primary: {{ branding.primary_color }}; --brand-accent: {{ branding.accent_color }};"{% endif %}>
     <header class="catalog-header">
       <div>
-        <p class="store-name">{{ store_name }}</p>
+        {% if branding and branding.logo_data_uri %}
+        <img class="publisher-logo" src="{{ branding.logo_data_uri }}" alt="{{ branding.display_name }}">
+        {% else %}
+        <p class="store-name">{{ branding.display_name if branding else store_name }}</p>
+        {% endif %}
         <h1>{{ title }}</h1>
+        {% if branding and (branding.contact_text or branding.social_handle) %}
+        <p class="publisher-details">{% if branding.contact_text %}{{ branding.contact_text }}{% endif %}{% if branding.contact_text and branding.social_handle %} · {% endif %}{% if branding.social_handle %}{{ branding.social_handle }}{% endif %}</p>
+        {% endif %}
       </div>
       <dl class="catalog-meta">
         <div><dt>Fecha</dt><dd>{{ as_of_label }}</dd></div>

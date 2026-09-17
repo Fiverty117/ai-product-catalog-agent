@@ -25,8 +25,10 @@ from app.db.models import CatalogArtifact, CatalogRenderRun, CatalogSnapshot, Jo
 from app.db.types import utc_now
 from app.domain.enums import ExtractionRunStatus
 from app.domain.schemas import (
+    CatalogBrandingView,
     CatalogRenderConfig,
     CatalogRenderJobPayload,
+    CatalogRenderJobPayloadV2,
     CatalogRenderProductView,
     CatalogRenderSectionView,
     CatalogRenderVariantView,
@@ -34,6 +36,13 @@ from app.domain.schemas import (
     CatalogSnapshotData,
     CatalogVariantSnapshot,
     FrozenCatalogAsset,
+    ResolvedCatalogBranding,
+)
+from app.services.catalog_branding import (
+    get_active_catalog_brand_profile,
+    hash_resolved_catalog_branding,
+    load_frozen_catalog_brand_logo,
+    resolve_catalog_branding,
 )
 from app.services.catalog_snapshots import (
     CatalogSnapshotError,
@@ -44,6 +53,7 @@ from app.services.jobs import enqueue_job
 from app.services.photo_intake import PhotoIntakeError, inspect_supported_image
 
 CATALOG_RENDER_JOB_TYPE = "catalog.render.v1"
+CATALOG_RENDER_JOB_TYPE_V2 = "catalog.render.v2"
 CATALOG_RENDERER_VERSION = "catalog-chromium-v1"
 CATALOG_RENDERER_ENGINE = "chromium"
 PDF_MEDIA_TYPE = "application/pdf"
@@ -181,14 +191,63 @@ def hash_catalog_render_config(config: CatalogRenderConfig) -> str:
 
 
 def build_catalog_render_idempotency_key(
-    payload: CatalogRenderJobPayload,
+    payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2,
+    *,
+    job_type: str = CATALOG_RENDER_JOB_TYPE,
 ) -> str:
-    identity = {
-        "job_type": CATALOG_RENDER_JOB_TYPE,
-        **payload.model_dump(mode="json"),
-    }
+    values = payload.model_dump(mode="json")
+    if isinstance(payload, CatalogRenderJobPayloadV2):
+        # Frozen data travels with the Job; its content hash and profile ID define
+        # the logical visual/lineage identity without row-specific logo UUIDs.
+        values.pop("branding_data")
+    identity = {"job_type": job_type, **values}
     digest = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
-    return f"{CATALOG_RENDER_JOB_TYPE}:{digest}"
+    return f"{job_type}:{digest}"
+
+
+def enqueue_catalog_render_v2(
+    session: Session,
+    *,
+    catalog_snapshot_id: uuid.UUID,
+    brand_profile_id: uuid.UUID,
+    config: CatalogRenderConfig | Mapping[str, Any] | None = None,
+    template_root: Path = DEFAULT_TEMPLATE_ROOT,
+    storage_root: Path = DEFAULT_STORAGE_ROOT,
+    renderer_version: str = CATALOG_RENDERER_VERSION,
+    max_attempts: int = 3,
+) -> Job:
+    normalized_config = normalize_catalog_render_config(config)
+    template = resolve_catalog_template(normalized_config.template_key, template_root=template_root)
+    snapshot = session.get(CatalogSnapshot, catalog_snapshot_id)
+    if snapshot is None:
+        raise InvalidCatalogRenderJobError(f"CatalogSnapshot not found: {catalog_snapshot_id}")
+    try:
+        read_catalog_snapshot_data(session, catalog_snapshot_id)
+    except CatalogSnapshotError as error:
+        raise InvalidCatalogRenderJobError(str(error)) from None
+    profile = get_active_catalog_brand_profile(session, profile_id=brand_profile_id)
+    branding = resolve_catalog_branding(profile, storage_root=storage_root)
+    version = renderer_version.strip()
+    if not version:
+        raise InvalidCatalogRenderJobError("renderer_version is required")
+    payload = CatalogRenderJobPayloadV2(
+        catalog_snapshot_id=snapshot.id,
+        snapshot_content_hash=snapshot.content_hash.lower(),
+        snapshot_schema_version=snapshot.schema_version,
+        template_key=template.key, template_version=template.version,
+        template_hash=hash_catalog_template(template), renderer_version=version,
+        config=normalized_config, config_hash=hash_catalog_render_config(normalized_config),
+        catalog_brand_profile_id=profile.id,
+        branding_schema_version=branding.schema_version,
+        branding_hash=hash_resolved_catalog_branding(branding),
+        branding_data=branding,
+    )
+    return enqueue_job(
+        session, job_type=CATALOG_RENDER_JOB_TYPE_V2,
+        payload=payload.model_dump(mode="json"),
+        idempotency_key=build_catalog_render_idempotency_key(payload, job_type=CATALOG_RENDER_JOB_TYPE_V2),
+        max_attempts=max_attempts,
+    )
 
 
 def enqueue_catalog_render(
@@ -240,7 +299,7 @@ def enqueue_catalog_render(
 def create_running_catalog_render_run(
     session: Session,
     *,
-    payload: CatalogRenderJobPayload,
+    payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2,
     job_id: uuid.UUID | None = None,
     started_at: datetime | None = None,
 ) -> tuple[CatalogRenderRun, CatalogSnapshotData]:
@@ -265,10 +324,14 @@ def create_running_catalog_render_run(
     job = None
     if job_id is not None:
         job = session.get(Job, job_id)
-        if job is None or job.job_type != CATALOG_RENDER_JOB_TYPE:
+        expected_type = CATALOG_RENDER_JOB_TYPE_V2 if isinstance(payload, CatalogRenderJobPayloadV2) else CATALOG_RENDER_JOB_TYPE
+        if job is None or job.job_type != expected_type:
             raise InvalidCatalogRenderJobError(
-                f"job must exist with type {CATALOG_RENDER_JOB_TYPE}"
+                f"job must exist with type {expected_type}"
             )
+    if isinstance(payload, CatalogRenderJobPayloadV2):
+        if hash_resolved_catalog_branding(payload.branding_data) != payload.branding_hash.lower():
+            raise InvalidCatalogRenderJobError("frozen branding payload hash mismatch")
     run = CatalogRenderRun(
         catalog_snapshot=snapshot,
         job=job,
@@ -280,6 +343,10 @@ def create_running_catalog_render_run(
         renderer_engine_version=None,
         locale=payload.config.locale,
         config_hash=payload.config_hash.lower(),
+        catalog_brand_profile_id=(payload.catalog_brand_profile_id if isinstance(payload, CatalogRenderJobPayloadV2) else None),
+        branding_schema_version=(payload.branding_schema_version if isinstance(payload, CatalogRenderJobPayloadV2) else None),
+        branding_hash=(payload.branding_hash.lower() if isinstance(payload, CatalogRenderJobPayloadV2) else None),
+        branding_data=(payload.branding_data.model_dump(mode="json") if isinstance(payload, CatalogRenderJobPayloadV2) else None),
         status=ExtractionRunStatus.RUNNING,
         started_at=started_at or utc_now(),
     )
@@ -348,6 +415,7 @@ def build_catalog_render_view_model(
     *,
     storage_root: Path = DEFAULT_STORAGE_ROOT,
     store_name: str = "Grabelan",
+    branding: ResolvedCatalogBranding | None = None,
 ) -> CatalogRenderViewModel:
     babel_locale = config.locale.replace("-", "_")
     sections: list[CatalogRenderSectionView] = []
@@ -393,13 +461,30 @@ def build_catalog_render_view_model(
         locale=config.locale,
         page_size=config.page_size,
         orientation=config.orientation,
-        store_name=store_name,
+        store_name=branding.display_name if branding else store_name,
+        branding=build_catalog_branding_view(branding, storage_root=storage_root) if branding else None,
         title="Catálogo",
         as_of_label=format_date(
             snapshot.as_of.date(), format="long", locale=babel_locale
         ),
         currency=snapshot.currency,
         sections=sections,
+    )
+
+
+def build_catalog_branding_view(
+    branding: ResolvedCatalogBranding,
+    *,
+    storage_root: Path = DEFAULT_STORAGE_ROOT,
+) -> CatalogBrandingView:
+    logo_data_uri = None
+    if branding.logo is not None:
+        content = load_frozen_catalog_brand_logo(branding.logo, storage_root=storage_root)
+        logo_data_uri = f"data:{branding.logo.mime_type};base64," + base64.b64encode(content).decode("ascii")
+    return CatalogBrandingView(
+        display_name=branding.display_name, logo_data_uri=logo_data_uri,
+        primary_color=branding.primary_color, accent_color=branding.accent_color,
+        contact_text=branding.contact_text, social_handle=branding.social_handle,
     )
 
 

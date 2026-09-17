@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db.models import CatalogRenderRun
-from app.domain.schemas import CatalogRenderJobPayload, CatalogSnapshotData
+from app.domain.schemas import CatalogRenderJobPayload, CatalogRenderJobPayloadV2, CatalogSnapshotData
 from app.rendering.catalog_pdf import (
     CatalogPdfRenderer,
     RetryableCatalogRendererError,
@@ -14,6 +14,7 @@ from app.rendering.catalog_pdf import (
 from app.services.catalog_rendering import (
     CATALOG_RENDERER_VERSION,
     CATALOG_RENDER_JOB_TYPE,
+    CATALOG_RENDER_JOB_TYPE_V2,
     DEFAULT_CATALOGS_DIR,
     DEFAULT_STORAGE_ROOT,
     DEFAULT_TEMPLATE_ROOT,
@@ -30,6 +31,7 @@ from app.services.catalog_rendering import (
     resolve_catalog_template,
     store_catalog_pdf,
 )
+from app.services.catalog_branding import CatalogBrandingError, hash_resolved_catalog_branding
 from app.services.jobs import PermanentJobError
 from app.workers.job_worker import ClaimedJob
 
@@ -67,6 +69,7 @@ class CatalogRenderJobHandler:
                 payload.config,
                 storage_root=self._storage_root,
                 store_name=template.display_name,
+                branding=payload.branding_data if isinstance(payload, CatalogRenderJobPayloadV2) else None,
             )
             if hash_catalog_template(template) != payload.template_hash.lower():
                 raise InvalidCatalogRenderJobError(
@@ -102,12 +105,12 @@ class CatalogRenderJobHandler:
             raise error from None
 
     def _validate_payload(self, claimed: ClaimedJob):
-        if claimed.job_type != CATALOG_RENDER_JOB_TYPE:
+        if claimed.job_type not in (CATALOG_RENDER_JOB_TYPE, CATALOG_RENDER_JOB_TYPE_V2):
             raise PermanentCatalogRenderError(
-                f"handler requires job type {CATALOG_RENDER_JOB_TYPE}"
+                "handler requires a supported catalog render job type"
             )
         try:
-            payload = CatalogRenderJobPayload.model_validate(claimed.payload)
+            payload = (CatalogRenderJobPayloadV2 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V2 else CatalogRenderJobPayload).model_validate(claimed.payload)
             normalized_config = normalize_catalog_render_config(payload.config)
             template = resolve_catalog_template(
                 payload.template_key,
@@ -126,12 +129,14 @@ class CatalogRenderJobHandler:
             raise PermanentCatalogRenderError(
                 "catalog render Job configuration is no longer supported"
             )
+        if isinstance(payload, CatalogRenderJobPayloadV2) and hash_resolved_catalog_branding(payload.branding_data) != payload.branding_hash.lower():
+            raise PermanentCatalogRenderError("frozen branding payload hash mismatch")
         return payload, template
 
     def _prepare_attempt(
         self,
         claimed: ClaimedJob,
-        payload: CatalogRenderJobPayload,
+        payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2,
     ) -> tuple[uuid.UUID, CatalogSnapshotData]:
         with self._session_factory() as session:
             try:
@@ -157,19 +162,16 @@ def catalog_render_handlers(
     renderer: CatalogPdfRenderer,
     **handler_options,
 ) -> dict[str, CatalogRenderJobHandler]:
-    return {
-        CATALOG_RENDER_JOB_TYPE: CatalogRenderJobHandler(
-            session_factory,
-            renderer,
-            **handler_options,
-        )
-    }
+    handler = CatalogRenderJobHandler(session_factory, renderer, **handler_options)
+    return {CATALOG_RENDER_JOB_TYPE: handler, CATALOG_RENDER_JOB_TYPE_V2: handler}
 
 
 def _safe_render_error(error: Exception) -> Exception:
     if isinstance(error, (PermanentJobError, RetryableCatalogRendererError)):
         return error
     if isinstance(error, CatalogRenderError):
+        return PermanentCatalogRenderError(str(error))
+    if isinstance(error, CatalogBrandingError):
         return PermanentCatalogRenderError(str(error))
     if isinstance(error, CatalogPdfStorageError):
         return RetryableCatalogRendererError("catalog PDF storage failed")

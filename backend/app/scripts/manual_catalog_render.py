@@ -13,19 +13,20 @@ from app.domain.enums import JobStatus
 from app.domain.schemas import CatalogRenderConfig
 from app.rendering.catalog_pdf import ChromiumCatalogPdfRenderer
 from app.services.catalog_rendering import (
-    CATALOG_RENDER_JOB_TYPE,
-    enqueue_catalog_render,
+    enqueue_catalog_render_v2,
 )
+from app.services.catalog_branding import get_active_catalog_brand_profile
 from app.services.jobs import requeue_failed_job
-from app.workers.catalog_render_handler import CatalogRenderJobHandler
+from app.workers.catalog_render_handler import catalog_render_handlers
 from app.workers.job_worker import JobWorker
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run one local Chromium catalog PDF render attempt."
     )
     parser.add_argument("--snapshot-id", required=True, type=uuid.UUID)
+    parser.add_argument("--brand-key", required=True, help="Explicit active catalog publisher profile key.")
     parser.add_argument("--locale", default="es-PY")
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument(
@@ -33,15 +34,21 @@ def main() -> None:
         action="store_true",
         help="Requeue the same failed logical Job when attempt budget remains.",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     engine = create_sqlite_engine(os.environ.get("DATABASE_URL", DATABASE_URL))
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     try:
         with session_factory() as session:
-            job = enqueue_catalog_render(
+            profile = get_active_catalog_brand_profile(session, key=args.brand_key)
+            job = enqueue_catalog_render_v2(
                 session,
                 catalog_snapshot_id=args.snapshot_id,
+                brand_profile_id=profile.id,
                 config=CatalogRenderConfig(locale=args.locale),
                 max_attempts=args.max_attempts,
             )
@@ -50,17 +57,15 @@ def main() -> None:
             session.commit()
             job_id = job.id
             status = job.status
+            profile_id = profile.id
+            profile_key = profile.key
+            branding_hash = job.payload["branding_hash"]
 
         if status is JobStatus.QUEUED:
             _require_job_is_next_eligible(session_factory, job_id)
             worker = JobWorker(
                 session_factory,
-                {
-                    CATALOG_RENDER_JOB_TYPE: CatalogRenderJobHandler(
-                        session_factory,
-                        ChromiumCatalogPdfRenderer(),
-                    )
-                },
+                catalog_render_handlers(session_factory, ChromiumCatalogPdfRenderer()),
             )
             if worker.run_once() != job_id:
                 raise RuntimeError("target catalog render Job was not eligible")
@@ -90,6 +95,9 @@ def main() -> None:
             print(
                 json.dumps(
                     {
+                        "brand_profile_id": str(profile_id),
+                        "brand_key": profile_key,
+                        "branding_hash": branding_hash,
                         "job_id": str(stored_job.id),
                         "job_status": stored_job.status.value,
                         "job_attempts": stored_job.attempts,

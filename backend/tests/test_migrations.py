@@ -18,6 +18,8 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "alembic_version",
         "brands",
         "catalog_artifacts",
+        "catalog_brand_assets",
+        "catalog_brand_profiles",
         "catalog_render_runs",
         "catalog_snapshots",
         "categories",
@@ -41,6 +43,234 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
     }
     engine.dispose()
     command.check(config)
+
+
+def _simulate_applied_0015_accent_check_typo(engine) -> None:
+    correct = "#" + "[0-9A-F]" * 6
+    broken = "#" + "[0-9A-F]" * 5
+    with engine.connect() as connection:
+        original_ddl = connection.scalar(text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='catalog_brand_profiles'"
+        ))
+        assert original_ddl is not None
+        assert f"accent_color GLOB '{correct}'" in original_ddl
+        bad_ddl = original_ddl.replace(
+            f"accent_color GLOB '{correct}'", f"accent_color GLOB '{broken}'", 1
+        ).replace(
+            "CREATE TABLE catalog_brand_profiles",
+            "CREATE TABLE catalog_brand_profiles_broken", 1,
+        )
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.commit()
+        connection.exec_driver_sql(bad_ddl)
+        connection.exec_driver_sql(
+            "INSERT INTO catalog_brand_profiles_broken SELECT * FROM catalog_brand_profiles"
+        )
+        connection.exec_driver_sql("DROP TABLE catalog_brand_profiles")
+        connection.exec_driver_sql(
+            "ALTER TABLE catalog_brand_profiles_broken RENAME TO catalog_brand_profiles"
+        )
+        connection.exec_driver_sql(
+            "CREATE INDEX ix_catalog_brand_profiles_logo_asset_id ON catalog_brand_profiles (logo_asset_id)"
+        )
+        connection.commit()
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        connection.commit()
+
+
+def _assert_six_hex_position_color_checks(engine) -> None:
+    checks = {
+        check["name"]: check["sqltext"]
+        for check in inspect(engine).get_check_constraints("catalog_brand_profiles")
+    }
+    for name in ("ck_catalog_brand_profiles_primary_color", "ck_catalog_brand_profiles_accent_color"):
+        assert "length(" in checks[name]
+        assert checks[name].count("[0-9A-F]") == 6
+
+
+def test_0016_repairs_applied_broken_check_without_fabricating_profiles(tmp_path) -> None:
+    database_path = tmp_path / "accent-repair-empty.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "20260922_0015")
+    engine = create_engine(f"sqlite:///{database_path}")
+    _simulate_applied_0015_accent_check_typo(engine)
+    original_checks = {
+        check["name"]: check["sqltext"]
+        for check in inspect(engine).get_check_constraints("catalog_brand_profiles")
+    }
+    assert connection_count(engine, "catalog_brand_profiles") == 0
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{database_path}")
+    _assert_six_hex_position_color_checks(engine)
+    repaired_checks = {
+        check["name"]: check["sqltext"]
+        for check in inspect(engine).get_check_constraints("catalog_brand_profiles")
+    }
+    assert set(repaired_checks) == set(original_checks)
+    for name in set(original_checks) - {"ck_catalog_brand_profiles_accent_color"}:
+        assert repaired_checks[name] == original_checks[name]
+    assert connection_count(engine, "catalog_brand_profiles") == 0
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO catalog_brand_profiles (id, key, display_name, logo_asset_id, primary_color, "
+            "accent_color, contact_text, social_handle, is_active, created_at, updated_at) "
+            "VALUES (:id, 'grabelan', 'Grabelan Natural Market', NULL, '#596B3F', '#B08A4A', "
+            "NULL, NULL, 1, :at, :at)"
+        ), {"id": "1" * 32, "at": "2026-09-15 00:00:00.000000"})
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    with engine.begin() as connection:
+        for profile_id, key, color in (("3" * 32, "white", "#FFFFFF"),
+                                       ("4" * 32, "black", "#000000")):
+            connection.execute(text(
+                "INSERT INTO catalog_brand_profiles (id, key, display_name, primary_color, "
+                "accent_color, is_active, created_at, updated_at) VALUES "
+                "(:id, :key, 'Boundary Color', :color, :color, 1, :at, :at)"
+            ), {"id": profile_id, "key": key, "color": color,
+                "at": "2026-09-15 00:00:00.000000"})
+    with engine.begin() as connection:
+        with pytest.raises(IntegrityError, match="ck_catalog_brand_profiles_accent_color"):
+            connection.execute(text(
+                "INSERT INTO catalog_brand_profiles (id, key, display_name, primary_color, "
+                "accent_color, is_active, created_at, updated_at) VALUES "
+                "(:id, 'bad-accent', 'Bad Accent', '#596B3F', '#B08A4G', 1, :at, :at)"
+            ), {"id": "5" * 32, "at": "2026-09-15 00:00:00.000000"})
+    with engine.begin() as connection:
+        with pytest.raises(IntegrityError, match="ck_catalog_brand_profiles_key_slug"):
+            connection.execute(text(
+                "INSERT INTO catalog_brand_profiles (id, key, display_name, primary_color, "
+                "accent_color, is_active, created_at, updated_at) VALUES "
+                "(:id, 'BAD-KEY', 'Bad Key', '#596B3F', '#B08A4A', 1, :at, :at)"
+            ), {"id": "6" * 32, "at": "2026-09-15 00:00:00.000000"})
+    with engine.begin() as connection:
+        with pytest.raises(IntegrityError, match="catalog_brand_profiles.key"):
+            connection.execute(text(
+                "INSERT INTO catalog_brand_profiles (id, key, display_name, primary_color, accent_color, "
+                "is_active, created_at, updated_at) VALUES (:id, 'grabelan', 'Duplicate', '#000000', "
+                "'#FFFFFF', 1, :at, :at)"
+            ), {"id": "2" * 32, "at": "2026-09-15 00:00:00.000000"})
+    engine.dispose()
+
+
+def connection_count(engine, table_name: str) -> int:
+    with engine.connect() as connection:
+        return connection.scalar(text(f"SELECT count(*) FROM {table_name}"))
+
+
+def test_0016_preserves_populated_profile_asset_and_historical_render_links(tmp_path) -> None:
+    database_path = tmp_path / "accent-repair-history.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "20260922_0015")
+    engine = create_engine(f"sqlite:///{database_path}")
+    _simulate_applied_0015_accent_check_typo(engine)
+    ids = {"asset": "1" * 32, "profile": "2" * 32, "snapshot": "3" * 32,
+           "run": "4" * 32, "artifact": "5" * 32}
+    at = "2026-09-15 00:00:00.000000"
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        connection.exec_driver_sql("PRAGMA ignore_check_constraints=ON")
+        connection.commit()
+        connection.execute(text(
+            "INSERT INTO catalog_brand_assets (id, file_path, checksum_sha256, mime_type, "
+            "file_size_bytes, width, height, created_at) VALUES (:asset, 'storage/branding/a.png', "
+            ":checksum, 'image/png', 100, 10, 10, :at)"
+        ), {**ids, "checksum": "a" * 64, "at": at})
+        connection.execute(text(
+            "INSERT INTO catalog_brand_profiles (id, key, display_name, logo_asset_id, primary_color, "
+            "accent_color, contact_text, social_handle, is_active, created_at, updated_at) "
+            "VALUES (:profile, 'grabelan', 'Historical Publisher', :asset, '#596B3F', "
+            "'#B08A4A', 'Old Contact', '@old', 1, :at, :at)"
+        ), {**ids, "at": at})
+        connection.execute(text(
+            "INSERT INTO catalog_snapshots (id, schema_version, currency, as_of, payload, content_hash, "
+            "created_at) VALUES (:snapshot, 'catalog-snapshot-v1', 'PYG', :at, '{}', :hash, :at)"
+        ), {**ids, "hash": "b" * 64, "at": at})
+        connection.execute(text(
+            "INSERT INTO catalog_render_runs (id, catalog_snapshot_id, catalog_brand_profile_id, "
+            "branding_schema_version, branding_hash, branding_data, template_key, template_version, "
+            "template_hash, renderer_version, renderer_engine, locale, config_hash, status, "
+            "started_at, completed_at, created_at) VALUES (:run, :snapshot, :profile, "
+            "'catalog-branding-v1', :branding_hash, :branding_data, 'grabelan-catalog-v1', "
+            "'1.0', :template_hash, 'catalog-chromium-v1', 'chromium', 'es-PY', :config_hash, "
+            "'succeeded', :at, :at, :at)"
+        ), {**ids, "branding_hash": "c" * 64, "branding_data": json.dumps({"display_name": "Historical Publisher"}),
+            "template_hash": "d" * 64, "config_hash": "e" * 64, "at": at})
+        connection.execute(text(
+            "INSERT INTO catalog_artifacts (id, catalog_snapshot_id, render_run_id, media_type, "
+            "file_path, checksum_sha256, file_size_bytes, page_count, created_at) "
+            "VALUES (:artifact, :snapshot, :run, 'application/pdf', 'storage/catalogs/old.pdf', "
+            ":checksum, 100, 1, :at)"
+        ), {**ids, "checksum": "f" * 64, "at": at})
+        connection.commit()
+        connection.exec_driver_sql("PRAGMA ignore_check_constraints=OFF")
+        connection.commit()
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{database_path}")
+    _assert_six_hex_position_color_checks(engine)
+    inspector = inspect(engine)
+    assert "ix_catalog_brand_profiles_logo_asset_id" in {
+        index["name"] for index in inspector.get_indexes("catalog_brand_profiles")
+    }
+    assert any(fk["referred_table"] == "catalog_brand_assets" for fk in inspector.get_foreign_keys("catalog_brand_profiles"))
+    assert any(fk["referred_table"] == "catalog_brand_profiles" for fk in inspector.get_foreign_keys("catalog_render_runs"))
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT key, display_name, logo_asset_id, primary_color, accent_color, contact_text, "
+            "social_handle, is_active FROM catalog_brand_profiles WHERE id=:profile"
+        ), ids).one() == ("grabelan", "Historical Publisher", ids["asset"],
+                         "#596B3F", "#B08A4A", "Old Contact", "@old", 1)
+        assert connection.execute(text(
+            "SELECT catalog_brand_profile_id, branding_hash, branding_data FROM catalog_render_runs WHERE id=:run"
+        ), ids).one() == (ids["profile"], "c" * 64, json.dumps({"display_name": "Historical Publisher"}))
+        assert connection.scalar(text("SELECT count(*) FROM catalog_brand_assets")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM catalog_artifacts")) == 1
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    engine.dispose()
+    command.check(config)
+
+
+def test_catalog_branding_migration_preserves_v1_render_history(tmp_path) -> None:
+    database_path = tmp_path / "catalog-branding-history.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "20260921_0014")
+    engine = create_engine(f"sqlite:///{database_path}")
+    timestamp = "2026-09-21 00:00:00.000000"
+    snapshot_id, run_id, artifact_id = ("1" * 32, "2" * 32, "3" * 32)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO catalog_snapshots (id, schema_version, currency, as_of, payload, content_hash, created_at) "
+            "VALUES (:id, 'catalog-snapshot-v1', 'PYG', :at, '{}', :hash, :at)"
+        ), {"id": snapshot_id, "at": timestamp, "hash": "a" * 64})
+        connection.execute(text(
+            "INSERT INTO catalog_render_runs (id, catalog_snapshot_id, template_key, template_version, template_hash, "
+            "renderer_version, renderer_engine, locale, config_hash, status, started_at, completed_at, created_at) "
+            "VALUES (:id, :snapshot, 'grabelan-catalog-v1', '1.0', :template_hash, 'catalog-chromium-v1', "
+            "'chromium', 'es-PY', :config_hash, 'succeeded', :at, :at, :at)"
+        ), {"id": run_id, "snapshot": snapshot_id, "template_hash": "b" * 64, "config_hash": "c" * 64, "at": timestamp})
+        connection.execute(text(
+            "INSERT INTO catalog_artifacts (id, catalog_snapshot_id, render_run_id, media_type, file_path, "
+            "checksum_sha256, file_size_bytes, page_count, created_at) "
+            "VALUES (:id, :snapshot, :run, 'application/pdf', 'storage/catalogs/old.pdf', :checksum, 100, 1, :at)"
+        ), {"id": artifact_id, "snapshot": snapshot_id, "run": run_id, "checksum": "d" * 64, "at": timestamp})
+    engine.dispose()
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{database_path}")
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT status, catalog_brand_profile_id, branding_hash, branding_data FROM catalog_render_runs WHERE id=:id"
+        ), {"id": run_id}).one() == ("succeeded", None, None, None)
+        assert connection.scalar(text("SELECT count(*) FROM catalog_artifacts")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM catalog_brand_profiles")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM catalog_brand_assets")) == 0
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    engine.dispose()
 
 
 def test_catalog_render_migration_preserves_snapshot_without_fabricating_output(

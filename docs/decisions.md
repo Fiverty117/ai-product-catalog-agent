@@ -172,3 +172,10 @@
 **Decision:** `catalog.render.v1` consumes only a validated CatalogSnapshot and its frozen presentation assets. A versioned local template is identified by key, human version and a deterministic hash of Jinja/CSS/static bytes. Normalized locale/page configuration, template lineage, renderer version, snapshot UUID and snapshot content identity form the durable Job key. Each browser attempt has an immutable CatalogRenderRun committed before Chromium starts. Successful PDF bytes are validated with pypdf, stored atomically by checksum under `storage/catalogs`, then linked through one immutable CatalogArtifact in a fresh transaction. Render HTML is transient, autoescaped, data-URI self-contained and executed in an offline browser context.
 
 **Why:** Separating snapshot content, prepared presentation and browser execution prevents live commerce changes from rewriting history and prevents long SQLite transactions during Chromium work. Snapshot UUID participates in idempotency to preserve distinct historical audit lineage; exact PDF bytes, rather than assumed browser reproducibility, are the immutable published artifact.
+
+---
+
+## ADR-026 — Catalog publisher branding is a separate frozen render dimension
+**Decision:** Current CatalogBrandProfile is separate from Product Brand and CatalogSnapshot. `catalog.render.v2` freezes a strict resolved publisher identity and logo locator/hash when enqueueing, then persists that payload on each CatalogRenderRun. The worker validates frozen branding and asset bytes without re-reading mutable profile state. Profile ID remains logical-request lineage; the visual branding hash excludes source row UUIDs. Existing `catalog.render.v1` Jobs/runs retain their original meaning and nullable branding audit fields.
+
+**Why:** One immutable commercial snapshot must be renderable under different current publishers/layouts without rewriting its content. Enqueue-time freezing prevents queued jobs and historical PDFs from drifting when a profile changes; content-addressed local logo assets keep renders offline and auditable.

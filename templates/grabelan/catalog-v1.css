@@ -6,6 +6,8 @@
   --text-secondary: #706b63;
   --border: #ddd8d0;
   --accent: #87663f;
+  --brand-primary: #87663f;
+  --brand-accent: #87663f;
   --radius: 3mm;
   --space-xs: 1.5mm;
   --space-sm: 3mm;
@@ -44,6 +46,23 @@ body { margin: 0; background: var(--page-bg); }
   text-transform: uppercase;
 }
 
+.store-name { color: var(--brand-primary); }
+.publisher-logo {
+  display: block;
+  height: auto;
+  max-height: 18mm;
+  max-width: 42mm;
+  object-fit: contain;
+  width: auto;
+  margin: 0 0 var(--space-sm);
+}
+.publisher-details {
+  color: var(--text-secondary);
+  font-size: 8pt;
+  margin: var(--space-sm) 0 0;
+  overflow-wrap: anywhere;
+}
+
 h1 {
   font-size: 25pt;
   font-weight: 550;
@@ -71,7 +90,7 @@ h1 {
 }
 
 .category-title {
-  border-left: 2.5px solid var(--accent);
+  border-left: 2.5px solid var(--brand-accent);
   break-after: avoid-page;
   font-size: 14pt;
   font-weight: 650;

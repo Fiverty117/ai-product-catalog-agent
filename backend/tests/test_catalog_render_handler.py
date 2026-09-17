@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import uuid
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.workers.catalog_render_handler as handler_module
-from app.db import Base, CatalogArtifact, CatalogRenderRun, CatalogSnapshot, Job
+from app.db import Base, CatalogArtifact, CatalogBrandProfile, CatalogRenderRun, CatalogSnapshot, Job
 from app.db.session import create_sqlite_engine
 from app.domain.enums import (
     CatalogHeroPhotoSource,
@@ -35,10 +36,17 @@ from app.rendering.catalog_pdf import (
 )
 from app.services.catalog_rendering import (
     CATALOG_RENDER_JOB_TYPE,
+    CATALOG_RENDER_JOB_TYPE_V2,
     enqueue_catalog_render,
+    enqueue_catalog_render_v2,
+)
+from app.services.catalog_branding import (
+    create_catalog_brand_profile,
+    ingest_catalog_brand_logo,
+    update_catalog_brand_profile,
 )
 from app.services.catalog_snapshots import hash_catalog_snapshot_data
-from app.workers.catalog_render_handler import CatalogRenderJobHandler
+from app.workers.catalog_render_handler import CatalogRenderJobHandler, catalog_render_handlers
 from app.workers.job_worker import JobWorker
 
 AS_OF = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
@@ -225,6 +233,7 @@ def test_success_commits_run_before_browser_and_creates_immutable_artifact(store
         assert run.status is ExtractionRunStatus.SUCCEEDED
         assert run.renderer_engine == "chromium"
         assert run.renderer_engine_version == "123.4"
+        assert run.catalog_brand_profile_id is None and run.branding_data is None
         assert artifact.catalog_snapshot_id == snapshot.id
         assert artifact.render_run_id == run.id
         assert artifact.media_type == "application/pdf"
@@ -348,3 +357,171 @@ def test_database_completion_failure_leaves_failed_run_and_retryable_job(
         )
         assert session.scalar(select(CatalogArtifact)) is None
     assert len(list(catalogs_dir.rglob("*.pdf"))) == 1
+
+
+def _create_publisher(factory, storage_root, key="grabelan", logo=None):
+    with factory() as session:
+        asset = ingest_catalog_brand_logo(session, logo, storage_root=storage_root) if logo else None
+        profile = create_catalog_brand_profile(session, {
+            "key": key, "display_name": "Publisher A", "primary_color": "#112233",
+            "accent_color": "#AABBCC",
+        }, logo_asset=asset, storage_root=storage_root)
+        session.commit()
+        return profile.id, asset.id if asset else None
+
+
+def _enqueue_v2(factory, storage_root, snapshot_id, profile_id):
+    with factory() as session:
+        job = enqueue_catalog_render_v2(
+            session, catalog_snapshot_id=snapshot_id, brand_profile_id=profile_id,
+            storage_root=storage_root, template_root=TEMPLATE_ROOT,
+        )
+        session.commit()
+        return job.id, job.idempotency_key, job.payload
+
+
+def _v2_worker(factory, storage_root, catalogs_dir, renderer):
+    return JobWorker(factory, catalog_render_handlers(
+        factory, renderer, storage_root=storage_root, catalogs_dir=catalogs_dir,
+        template_root=TEMPLATE_ROOT,
+    ))
+
+
+def test_v2_freezes_branding_at_enqueue_and_does_not_hold_transaction_during_browser(store):
+    factory, storage_root, catalogs_dir = store
+    snapshot_id, _ = create_snapshot(factory, storage_root)
+    profile_id, _ = _create_publisher(factory, storage_root)
+    job_id, _, original_payload = _enqueue_v2(factory, storage_root, snapshot_id, profile_id)
+    assert original_payload["branding_data"]["display_name"] == "Publisher A"
+    with factory() as session:
+        profile = session.get(CatalogBrandProfile, profile_id)
+        update_catalog_brand_profile(session, profile, {"display_name": "Publisher B", "accent_color": "#334455"})
+        session.commit()
+
+    def observe():
+        with factory() as session:
+            run = session.scalar(select(CatalogRenderRun))
+            assert run.status is ExtractionRunStatus.RUNNING
+            assert run.branding_data["display_name"] == "Publisher A"
+            profile = session.get(CatalogBrandProfile, profile_id)
+            update_catalog_brand_profile(session, profile, {"display_name": "Publisher C"})
+            session.commit()  # Slow browser boundary holds no SQLite transaction.
+
+    renderer = FakeRenderer(valid_pdf(), observer=observe)
+    _v2_worker(factory, storage_root, catalogs_dir, renderer).run_once()
+    with factory() as session:
+        run = session.scalar(select(CatalogRenderRun))
+        assert session.get(Job, job_id).status is JobStatus.SUCCEEDED
+        assert run.catalog_brand_profile_id == profile_id
+        assert run.branding_schema_version == "catalog-branding-v1"
+        assert run.branding_hash == original_payload["branding_hash"]
+        assert run.branding_data == original_payload["branding_data"]
+        assert session.get(CatalogBrandProfile, profile_id).display_name == "Publisher C"
+    html, _ = renderer.calls[0]
+    assert "Publisher A" in html and "Publisher B" not in html and "Publisher C" not in html
+    assert 'class="store-name"' in html and 'class="publisher-logo"' not in html
+    assert "Frozen Brand" in html  # Product Brand remains snapshot commerce content.
+
+
+def test_v2_idempotency_uses_profile_lineage_and_visual_branding_hash(store):
+    factory, storage_root, _ = store
+    snapshot_id, _ = create_snapshot(factory, storage_root)
+    first_id, _ = _create_publisher(factory, storage_root, "grabelan")
+    second_id, _ = _create_publisher(factory, storage_root, "gravefit")
+    first_job, first_key, first_payload = _enqueue_v2(factory, storage_root, snapshot_id, first_id)
+    same_job, same_key, _ = _enqueue_v2(factory, storage_root, snapshot_id, first_id)
+    _, second_key, second_payload = _enqueue_v2(factory, storage_root, snapshot_id, second_id)
+    assert first_job == same_job and first_key == same_key
+    assert first_payload["branding_hash"] == second_payload["branding_hash"]
+    assert first_key != second_key
+    with factory() as session:
+        update_catalog_brand_profile(session, session.get(CatalogBrandProfile, first_id), {"primary_color": "#010203"})
+        session.commit()
+    _, changed_key, changed_payload = _enqueue_v2(factory, storage_root, snapshot_id, first_id)
+    assert changed_payload["branding_hash"] != first_payload["branding_hash"]
+    assert changed_key != first_key
+    with factory() as session:
+        assert session.get(Job, first_job).job_type == CATALOG_RENDER_JOB_TYPE_V2
+
+
+def test_v2_logo_swap_does_not_change_queued_job_and_missing_frozen_logo_fails(store):
+    factory, storage_root, catalogs_dir = store
+    snapshot_id, _ = create_snapshot(factory, storage_root)
+    logo_output = BytesIO()
+    Image.new("RGB", (17, 14), (80, 90, 100)).save(logo_output, format="PNG")
+    logo_a = logo_output.getvalue()
+    profile_id, asset_id = _create_publisher(factory, storage_root, logo=logo_a)
+    job_id, _, frozen_payload = _enqueue_v2(factory, storage_root, snapshot_id, profile_id)
+    logo_output = BytesIO()
+    Image.new("RGB", (17, 14), (100, 90, 80)).save(logo_output, format="PNG")
+    with factory() as session:
+        newer = ingest_catalog_brand_logo(session, logo_output.getvalue(), storage_root=storage_root)
+        update_catalog_brand_profile(session, session.get(CatalogBrandProfile, profile_id), {}, logo_asset=newer, change_logo=True, storage_root=storage_root)
+        session.commit()
+    frozen_path = storage_root / frozen_payload["branding_data"]["logo"]["storage_relative_path"]
+    frozen_path.unlink()
+    renderer = FakeRenderer(valid_pdf())
+    _v2_worker(factory, storage_root, catalogs_dir, renderer).run_once()
+    with factory() as session:
+        assert session.get(Job, job_id).status is JobStatus.FAILED
+        run = session.scalar(select(CatalogRenderRun))
+        assert run.branding_data["logo"]["source_brand_asset_id"] == str(asset_id)
+        assert run.status is ExtractionRunStatus.FAILED
+        assert session.scalar(select(CatalogArtifact)) is None
+    assert renderer.calls == []
+
+
+def test_v2_valid_logo_is_embedded_offline_and_historical_run_survives_deactivation(store):
+    factory, storage_root, catalogs_dir = store
+    snapshot_id, _ = create_snapshot(factory, storage_root)
+    output = BytesIO()
+    Image.new("RGB", (18, 12), (38, 68, 98)).save(output, format="PNG")
+    profile_id, _ = _create_publisher(factory, storage_root, logo=output.getvalue())
+    job_id, _, frozen = _enqueue_v2(factory, storage_root, snapshot_id, profile_id)
+    renderer = FakeRenderer(valid_pdf())
+    newer_output = BytesIO()
+    Image.new("RGB", (18, 12), (98, 68, 38)).save(newer_output, format="PNG")
+    with factory() as session:
+        newer = ingest_catalog_brand_logo(session, newer_output.getvalue(), storage_root=storage_root)
+        update_catalog_brand_profile(session, session.get(CatalogBrandProfile, profile_id), {}, logo_asset=newer, change_logo=True, storage_root=storage_root)
+        session.commit()
+    _v2_worker(factory, storage_root, catalogs_dir, renderer).run_once()
+    html, _ = renderer.calls[0]
+    assert 'class="publisher-logo"' in html
+    assert "data:image/png;base64," in html
+    assert base64.b64encode(output.getvalue()).decode("ascii") in html
+    assert base64.b64encode(newer_output.getvalue()).decode("ascii") not in html
+    assert hashlib.sha256(output.getvalue()).hexdigest() == frozen["branding_data"]["logo"]["checksum_sha256"]
+    assert newer_output.getvalue() != output.getvalue()
+    assert frozen["branding_data"]["logo"]["checksum_sha256"] != hashlib.sha256(newer_output.getvalue()).hexdigest()
+    assert "https://" not in html and "file://" not in html
+    with factory() as session:
+        update_catalog_brand_profile(session, session.get(CatalogBrandProfile, profile_id), {"is_active": False})
+        session.commit()
+    with factory() as session:
+        run = session.scalar(select(CatalogRenderRun))
+        assert session.get(Job, job_id).status is JobStatus.SUCCEEDED
+        assert run.branding_data == frozen["branding_data"]
+        assert session.scalar(select(CatalogArtifact)) is not None
+        with pytest.raises(Exception, match="inactive"):
+            enqueue_catalog_render_v2(session, catalog_snapshot_id=snapshot_id,
+                                      brand_profile_id=profile_id, storage_root=storage_root,
+                                      template_root=TEMPLATE_ROOT)
+
+
+def test_v2_malformed_frozen_hash_permanently_fails_before_render_run(store):
+    factory, storage_root, catalogs_dir = store
+    snapshot_id, _ = create_snapshot(factory, storage_root)
+    profile_id, _ = _create_publisher(factory, storage_root)
+    job_id, _, _ = _enqueue_v2(factory, storage_root, snapshot_id, profile_id)
+    with factory() as session:
+        job = session.get(Job, job_id)
+        job.payload = {**job.payload, "branding_hash": "0" * 64}
+        session.commit()
+    renderer = FakeRenderer(valid_pdf())
+    _v2_worker(factory, storage_root, catalogs_dir, renderer).run_once()
+    with factory() as session:
+        assert session.get(Job, job_id).status is JobStatus.FAILED
+        assert session.scalar(select(CatalogRenderRun)) is None
+        assert session.scalar(select(CatalogArtifact)) is None
+    assert renderer.calls == []

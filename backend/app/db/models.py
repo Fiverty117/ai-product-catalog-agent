@@ -1087,6 +1087,56 @@ class CatalogSnapshot(Base):
     )
 
 
+class CatalogBrandAsset(Base):
+    __tablename__ = "catalog_brand_assets"
+    __table_args__ = (
+        CheckConstraint("length(trim(file_path)) > 0", name="ck_catalog_brand_assets_path"),
+        CheckConstraint("length(checksum_sha256) = 64 AND checksum_sha256 NOT GLOB '*[^0-9a-fA-F]*'", name="ck_catalog_brand_assets_checksum"),
+        CheckConstraint("mime_type IN ('image/png', 'image/jpeg', 'image/webp')", name="ck_catalog_brand_assets_mime"),
+        CheckConstraint("file_size_bytes > 0 AND width > 0 AND height > 0", name="ck_catalog_brand_assets_dimensions"),
+        Index("ix_catalog_brand_assets_checksum", "checksum_sha256"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(nullable=False)
+    width: Mapped[int] = mapped_column(nullable=False)
+    height: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+
+    profiles: Mapped[list["CatalogBrandProfile"]] = relationship(back_populates="logo_asset")
+
+
+class CatalogBrandProfile(Base):
+    __tablename__ = "catalog_brand_profiles"
+    __table_args__ = (
+        CheckConstraint("length(trim(key)) > 0", name="ck_catalog_brand_profiles_key"),
+        CheckConstraint("key GLOB '[a-z]*' AND key NOT GLOB '*[^a-z0-9-]*' AND key NOT GLOB '*--*' AND key NOT GLOB '*-'", name="ck_catalog_brand_profiles_key_slug"),
+        CheckConstraint("length(trim(display_name)) > 0", name="ck_catalog_brand_profiles_name"),
+        CheckConstraint("length(primary_color) = 7 AND primary_color GLOB '#[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]'", name="ck_catalog_brand_profiles_primary_color"),
+        CheckConstraint("length(accent_color) = 7 AND accent_color GLOB '#[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]'", name="ck_catalog_brand_profiles_accent_color"),
+        UniqueConstraint("key", name="uq_catalog_brand_profiles_key"),
+        Index("ix_catalog_brand_profiles_logo_asset_id", "logo_asset_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String(100), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    logo_asset_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("catalog_brand_assets.id"))
+    primary_color: Mapped[str] = mapped_column(String(7), nullable=False)
+    accent_color: Mapped[str] = mapped_column(String(7), nullable=False)
+    contact_text: Mapped[str | None] = mapped_column(String(500))
+    social_handle: Mapped[str | None] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now)
+
+    logo_asset: Mapped[CatalogBrandAsset | None] = relationship(back_populates="profiles")
+    render_runs: Mapped[list["CatalogRenderRun"]] = relationship(back_populates="catalog_brand_profile")
+
+
 class CatalogRenderRun(Base):
     __tablename__ = "catalog_render_runs"
     __table_args__ = (
@@ -1127,6 +1177,7 @@ class CatalogRenderRun(Base):
         ),
         Index("ix_catalog_render_runs_catalog_snapshot_id", "catalog_snapshot_id"),
         Index("ix_catalog_render_runs_job_id", "job_id"),
+        Index("ix_catalog_render_runs_brand_profile_id", "catalog_brand_profile_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1146,6 +1197,10 @@ class CatalogRenderRun(Base):
     renderer_engine_version: Mapped[str | None] = mapped_column(String(255))
     locale: Mapped[str] = mapped_column(String(35), nullable=False)
     config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    catalog_brand_profile_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("catalog_brand_profiles.id"))
+    branding_schema_version: Mapped[str | None] = mapped_column(String(100))
+    branding_hash: Mapped[str | None] = mapped_column(String(64))
+    branding_data: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     status: Mapped[ExtractionRunStatus] = mapped_column(
         Enum(
             ExtractionRunStatus,
@@ -1168,6 +1223,7 @@ class CatalogRenderRun(Base):
         back_populates="render_runs"
     )
     job: Mapped[Job | None] = relationship(back_populates="catalog_render_runs")
+    catalog_brand_profile: Mapped[CatalogBrandProfile | None] = relationship(back_populates="render_runs")
     artifact: Mapped["CatalogArtifact | None"] = relationship(
         back_populates="render_run", uselist=False
     )

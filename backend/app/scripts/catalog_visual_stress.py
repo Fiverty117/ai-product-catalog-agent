@@ -13,9 +13,11 @@ from app.domain.schemas import (
     CatalogRenderSectionView,
     CatalogRenderVariantView,
     CatalogRenderViewModel,
+    ResolvedCatalogBranding,
 )
 from app.rendering.catalog_pdf import ChromiumCatalogPdfRenderer
 from app.services.catalog_rendering import (
+    build_catalog_branding_view,
     render_catalog_html,
     resolve_catalog_template,
     validate_catalog_pdf,
@@ -169,6 +171,14 @@ def build_stress_view_model(
         page_size=resolved_config.page_size,
         orientation=resolved_config.orientation,
         store_name="CATÁLOGO QA - DATOS SINTÉTICOS",
+        branding=build_catalog_branding_view(ResolvedCatalogBranding(
+            schema_version="catalog-branding-v1",
+            source_profile_id=_qa_uuid("publisher:synthetic"),
+            profile_key="qa-synthetic",
+            display_name="CATÁLOGO QA - DATOS SINTÉTICOS",
+            primary_color="#87663F", accent_color="#87663F",
+            contact_text=None, social_handle=None, logo=None,
+        )),
         title="Prueba visual Classic",
         as_of_label="14 de septiembre de 2026",
         currency="PYG",

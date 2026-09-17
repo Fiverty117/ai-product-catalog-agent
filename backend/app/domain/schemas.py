@@ -1075,6 +1075,100 @@ class CatalogRenderJobPayload(StrictSchema):
     config_hash: Sha256
 
 
+CatalogBrandKey = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", max_length=100)]
+CatalogBrandColor = Annotated[str, StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$")]
+
+
+class CatalogBrandProfileCreate(StrictSchema):
+    key: CatalogBrandKey
+    display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+    primary_color: CatalogBrandColor
+    accent_color: CatalogBrandColor
+    contact_text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] | None = None
+    social_handle: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)] | None = None
+
+    @field_validator("primary_color", "accent_color")
+    @classmethod
+    def canonical_color(cls, value: str) -> str:
+        return value.upper()
+
+
+class CatalogBrandProfileUpdate(StrictSchema):
+    display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)] | None = None
+    primary_color: CatalogBrandColor | None = None
+    accent_color: CatalogBrandColor | None = None
+    contact_text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] | None = None
+    social_handle: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)] | None = None
+    is_active: bool | None = None
+
+    @field_validator("primary_color", "accent_color")
+    @classmethod
+    def canonical_color(cls, value: str | None) -> str | None:
+        return value.upper() if value is not None else None
+
+    @model_validator(mode="after")
+    def required_fields_cannot_be_cleared(self):
+        if any(name in self.model_fields_set and getattr(self, name) is None for name in ("display_name", "primary_color", "accent_color", "is_active")):
+            raise ValueError("required catalog brand profile fields cannot be cleared")
+        return self
+
+
+class FrozenCatalogBrandLogo(StrictSchema):
+    source_brand_asset_id: uuid.UUID
+    checksum_sha256: Sha256
+    mime_type: Literal["image/png", "image/jpeg", "image/webp"]
+    file_size_bytes: int = Field(gt=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    storage_relative_path: Annotated[str, StringConstraints(pattern=r"^branding/[0-9a-f]{2}/[0-9a-f]{64}\.(?:png|jpg|webp)$")]
+
+    @model_validator(mode="after")
+    def validate_locator(self):
+        suffix = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}[self.mime_type]
+        if self.storage_relative_path != f"branding/{self.checksum_sha256[:2].lower()}/{self.checksum_sha256.lower()}{suffix}":
+            raise ValueError("branding logo locator must match frozen content identity")
+        return self
+
+
+class ResolvedCatalogBranding(StrictSchema):
+    schema_version: Literal["catalog-branding-v1"]
+    source_profile_id: uuid.UUID
+    profile_key: CatalogBrandKey
+    display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+    primary_color: CatalogBrandColor
+    accent_color: CatalogBrandColor
+    contact_text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] | None = None
+    social_handle: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)] | None = None
+    logo: FrozenCatalogBrandLogo | None = None
+
+    @field_validator("primary_color", "accent_color")
+    @classmethod
+    def canonical_color(cls, value: str) -> str:
+        return value.upper()
+
+
+class CatalogRenderJobPayloadV2(CatalogRenderJobPayload):
+    catalog_brand_profile_id: uuid.UUID
+    branding_schema_version: Literal["catalog-branding-v1"]
+    branding_hash: Sha256
+    branding_data: ResolvedCatalogBranding
+
+    @model_validator(mode="after")
+    def validate_brand_lineage(self):
+        if self.branding_data.source_profile_id != self.catalog_brand_profile_id or self.branding_data.schema_version != self.branding_schema_version:
+            raise ValueError("frozen branding lineage does not match render Job")
+        return self
+
+
+class CatalogBrandingView(StrictSchema):
+    display_name: NonEmptyText
+    logo_data_uri: Annotated[str, StringConstraints(pattern=r"^data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$")] | None = None
+    primary_color: CatalogBrandColor
+    accent_color: CatalogBrandColor
+    contact_text: Annotated[str, StringConstraints(min_length=1, max_length=500)] | None = None
+    social_handle: Annotated[str, StringConstraints(min_length=1, max_length=255)] | None = None
+
+
 class CatalogRenderVariantView(StrictSchema):
     source_sku_id: uuid.UUID
     label: str | None
@@ -1100,6 +1194,7 @@ class CatalogRenderViewModel(StrictSchema):
     page_size: Literal["A4"]
     orientation: Literal["portrait", "landscape"]
     store_name: NonEmptyText
+    branding: CatalogBrandingView | None = None
     title: NonEmptyText
     as_of_label: NonEmptyText
     currency: CurrencyCode
@@ -1118,6 +1213,10 @@ class CatalogRenderRunRead(ReadSchema):
     renderer_engine_version: str | None
     locale: str
     config_hash: str
+    catalog_brand_profile_id: uuid.UUID | None
+    branding_schema_version: str | None
+    branding_hash: str | None
+    branding_data: ResolvedCatalogBranding | None
     status: ExtractionRunStatus
     sanitized_error: str | None
     started_at: datetime
