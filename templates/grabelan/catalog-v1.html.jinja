@@ -8,7 +8,7 @@
       {{ stylesheet | safe }}
     </style>
   </head>
-  <body{% if branding %} style="--brand-primary: {{ branding.primary_color }}; --brand-accent: {{ branding.accent_color }};"{% endif %}>
+  <body class="layout {{ layout.css_class }}"{% if branding %} style="--brand-primary: {{ branding.primary_color }}; --brand-accent: {{ branding.accent_color }};"{% endif %}>
     <header class="catalog-header">
       <div>
         {% if branding and branding.logo_data_uri %}
@@ -27,13 +27,12 @@
       </dl>
     </header>
 
-    {% set products_per_row = 2 %}
-    <main style="--products-per-row: {{ products_per_row }}">
+    <main style="--products-per-row: {{ layout.products_per_row }}">
       {% for section in sections %}
       <section class="category-section">
         <h2 class="category-title">{{ section.category_name }}</h2>
         <div class="product-rows">
-          {% for product_row in section.products | batch(products_per_row) %}
+          {% for product_row in section.products | batch(layout.products_per_row) %}
           <div class="product-row">
             {% for product in product_row %}
             <article class="product-card">

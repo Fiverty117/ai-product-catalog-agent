@@ -1197,6 +1197,8 @@ class CatalogRenderRun(Base):
     renderer_engine_version: Mapped[str | None] = mapped_column(String(255))
     locale: Mapped[str] = mapped_column(String(35), nullable=False)
     config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    layout_key: Mapped[str | None] = mapped_column(String(50))
+    layout_version: Mapped[str | None] = mapped_column(String(100))
     catalog_brand_profile_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("catalog_brand_profiles.id"))
     branding_schema_version: Mapped[str | None] = mapped_column(String(100))
     branding_hash: Mapped[str | None] = mapped_column(String(64))

@@ -208,7 +208,9 @@ def test_developer_cli_requires_explicit_brand_and_supports_profile_commands():
     render = catalog_render_parser()
     with pytest.raises(SystemExit):
         render.parse_args(["--snapshot-id", str(uuid.uuid4())])
-    assert render.parse_args(["--snapshot-id", str(uuid.uuid4()), "--brand-key", "grabelan"]).brand_key == "grabelan"
+    render_args = render.parse_args(["--snapshot-id", str(uuid.uuid4()), "--brand-key", "grabelan"])
+    assert render_args.brand_key == "grabelan"
+    assert render_args.layout == "classic"
 
 
 def test_frozen_branding_schema_rejects_unsupported_version_and_machine_path():

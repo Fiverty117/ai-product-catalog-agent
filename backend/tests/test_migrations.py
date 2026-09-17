@@ -264,8 +264,9 @@ def test_catalog_branding_migration_preserves_v1_render_history(tmp_path) -> Non
     engine = create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
         assert connection.execute(text(
-            "SELECT status, catalog_brand_profile_id, branding_hash, branding_data FROM catalog_render_runs WHERE id=:id"
-        ), {"id": run_id}).one() == ("succeeded", None, None, None)
+            "SELECT status, catalog_brand_profile_id, branding_hash, branding_data, layout_key, layout_version "
+            "FROM catalog_render_runs WHERE id=:id"
+        ), {"id": run_id}).one() == ("succeeded", None, None, None, None, None)
         assert connection.scalar(text("SELECT count(*) FROM catalog_artifacts")) == 1
         assert connection.scalar(text("SELECT count(*) FROM catalog_brand_profiles")) == 0
         assert connection.scalar(text("SELECT count(*) FROM catalog_brand_assets")) == 0

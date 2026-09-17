@@ -192,6 +192,97 @@ h1 {
 
 .variant-row--price-only .variant-price { grid-column: 1 / -1; }
 
+.layout-dense .catalog-header {
+  gap: 6mm;
+  margin-bottom: 5mm;
+  padding-bottom: 3mm;
+}
+.layout-dense h1 { font-size: 22pt; }
+.layout-dense .category-section { margin-bottom: 6mm; }
+.layout-dense .category-title {
+  font-size: 12.5pt;
+  margin-bottom: 3mm;
+}
+.layout-dense .product-row {
+  gap: 3.5mm;
+  margin-bottom: 3.5mm;
+}
+.layout-dense .product-image-frame {
+  height: 48mm;
+  padding: 2.5mm;
+}
+.layout-dense .product-content { padding: 3mm 3.5mm 3.5mm; }
+.layout-dense .product-brand {
+  font-size: 6.5pt;
+  letter-spacing: 0.1em;
+  margin-bottom: 1mm;
+}
+.layout-dense .product-content h3 {
+  font-size: 11.5pt;
+  line-height: 1.18;
+}
+.layout-dense .variant-list { margin-top: 2.5mm; }
+.layout-dense .variant-row {
+  column-gap: 1.5mm;
+  font-size: 8.25pt;
+  min-height: 7.5mm;
+  padding: 1.5mm 0;
+}
+.layout-dense .variant-price { font-size: 10.25pt; }
+
+.layout-compact .catalog-header {
+  gap: 4mm;
+  margin-bottom: 4mm;
+  padding-bottom: 2.5mm;
+}
+.layout-compact .publisher-logo {
+  max-height: 14mm;
+  max-width: 36mm;
+}
+.layout-compact .publisher-details { font-size: 7pt; }
+.layout-compact h1 { font-size: 19pt; }
+.layout-compact .catalog-meta { gap: 4mm; font-size: 8pt; }
+.layout-compact .catalog-meta dt { font-size: 6.25pt; }
+.layout-compact .category-section { margin-bottom: 5mm; }
+.layout-compact .category-title {
+  font-size: 11pt;
+  margin-bottom: 2.5mm;
+  padding-left: 2mm;
+}
+.layout-compact .product-row {
+  gap: 2.5mm;
+  margin-bottom: 2.5mm;
+}
+.layout-compact .product-image-frame {
+  height: 34mm;
+  padding: 2mm;
+}
+.layout-compact .product-content { padding: 2.5mm; }
+.layout-compact .product-brand {
+  font-size: 5.75pt;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  margin-bottom: 0.75mm;
+}
+.layout-compact .product-content h3 {
+  font-size: 9.25pt;
+  line-height: 1.18;
+}
+.layout-compact .variant-list { margin-top: 2mm; }
+.layout-compact .variant-row {
+  display: block;
+  font-size: 7.25pt;
+  min-height: 0;
+  padding: 1.5mm 0;
+}
+.layout-compact .variant-price {
+  display: block;
+  font-size: 9pt;
+  margin-top: 0.75mm;
+  text-align: right;
+}
+.layout-compact .variant-row--price-only .variant-price { margin-top: 0; }
+
 @media print {
   .category-title,
   .product-row,

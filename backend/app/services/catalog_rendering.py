@@ -29,6 +29,7 @@ from app.domain.schemas import (
     CatalogRenderConfig,
     CatalogRenderJobPayload,
     CatalogRenderJobPayloadV2,
+    CatalogRenderLayoutView,
     CatalogRenderProductView,
     CatalogRenderSectionView,
     CatalogRenderVariantView,
@@ -37,6 +38,11 @@ from app.domain.schemas import (
     CatalogVariantSnapshot,
     FrozenCatalogAsset,
     ResolvedCatalogBranding,
+)
+from app.rendering.catalog_layouts import (
+    CatalogLayoutDefinition,
+    UnknownCatalogLayoutError,
+    resolve_catalog_layout,
 )
 from app.services.catalog_branding import (
     get_active_catalog_brand_profile,
@@ -185,9 +191,30 @@ def normalize_catalog_render_config(
 
 
 def hash_catalog_render_config(config: CatalogRenderConfig) -> str:
+    # Layout has its own explicit semantic identity in catalog.render.v2. Keeping
+    # it out of the legacy config hash preserves validation of already-enqueued
+    # v1/v2 payloads created before layout selection existed.
     return hashlib.sha256(
-        _canonical_json(config.model_dump(mode="json")).encode("utf-8")
+        _canonical_json(config.model_dump(mode="json", exclude={"layout"})).encode("utf-8")
     ).hexdigest()
+
+
+def resolve_catalog_render_layout(
+    config: CatalogRenderConfig,
+    *,
+    require_registered_geometry: bool = True,
+) -> CatalogLayoutDefinition:
+    try:
+        layout = resolve_catalog_layout(config.layout)
+    except UnknownCatalogLayoutError as error:
+        raise InvalidCatalogRenderConfigError(str(error)) from None
+    if require_registered_geometry and (
+        config.page_size != layout.page_size or config.orientation != layout.orientation
+    ):
+        raise InvalidCatalogRenderConfigError(
+            f"catalog layout {layout.key} requires {layout.page_size} {layout.orientation}"
+        )
+    return layout
 
 
 def build_catalog_render_idempotency_key(
@@ -217,6 +244,7 @@ def enqueue_catalog_render_v2(
     max_attempts: int = 3,
 ) -> Job:
     normalized_config = normalize_catalog_render_config(config)
+    layout = resolve_catalog_render_layout(normalized_config)
     template = resolve_catalog_template(normalized_config.template_key, template_root=template_root)
     snapshot = session.get(CatalogSnapshot, catalog_snapshot_id)
     if snapshot is None:
@@ -241,6 +269,8 @@ def enqueue_catalog_render_v2(
         branding_schema_version=branding.schema_version,
         branding_hash=hash_resolved_catalog_branding(branding),
         branding_data=branding,
+        layout_key=layout.key,
+        layout_version=layout.version,
     )
     return enqueue_job(
         session, job_type=CATALOG_RENDER_JOB_TYPE_V2,
@@ -260,6 +290,10 @@ def enqueue_catalog_render(
     max_attempts: int = 3,
 ) -> Job:
     normalized_config = normalize_catalog_render_config(config)
+    if normalized_config.layout != "classic":
+        raise InvalidCatalogRenderConfigError(
+            "legacy catalog.render.v1 only supports the classic layout"
+        )
     template = resolve_catalog_template(
         normalized_config.template_key,
         template_root=template_root,
@@ -332,6 +366,11 @@ def create_running_catalog_render_run(
     if isinstance(payload, CatalogRenderJobPayloadV2):
         if hash_resolved_catalog_branding(payload.branding_data) != payload.branding_hash.lower():
             raise InvalidCatalogRenderJobError("frozen branding payload hash mismatch")
+        layout = resolve_catalog_render_layout(payload.config)
+        if payload.layout_key != layout.key or payload.layout_version != layout.version:
+            raise InvalidCatalogRenderJobError(
+                "catalog render Job layout lineage is no longer supported"
+            )
     run = CatalogRenderRun(
         catalog_snapshot=snapshot,
         job=job,
@@ -343,6 +382,8 @@ def create_running_catalog_render_run(
         renderer_engine_version=None,
         locale=payload.config.locale,
         config_hash=payload.config_hash.lower(),
+        layout_key=(payload.layout_key if isinstance(payload, CatalogRenderJobPayloadV2) else None),
+        layout_version=(payload.layout_version if isinstance(payload, CatalogRenderJobPayloadV2) else None),
         catalog_brand_profile_id=(payload.catalog_brand_profile_id if isinstance(payload, CatalogRenderJobPayloadV2) else None),
         branding_schema_version=(payload.branding_schema_version if isinstance(payload, CatalogRenderJobPayloadV2) else None),
         branding_hash=(payload.branding_hash.lower() if isinstance(payload, CatalogRenderJobPayloadV2) else None),
@@ -417,6 +458,7 @@ def build_catalog_render_view_model(
     store_name: str = "Grabelan",
     branding: ResolvedCatalogBranding | None = None,
 ) -> CatalogRenderViewModel:
+    layout = resolve_catalog_render_layout(config, require_registered_geometry=False)
     babel_locale = config.locale.replace("-", "_")
     sections: list[CatalogRenderSectionView] = []
     for section in snapshot.sections:
@@ -463,6 +505,14 @@ def build_catalog_render_view_model(
         orientation=config.orientation,
         store_name=branding.display_name if branding else store_name,
         branding=build_catalog_branding_view(branding, storage_root=storage_root) if branding else None,
+        layout=CatalogRenderLayoutView(
+            key=layout.key,
+            version=layout.version,
+            products_per_row=layout.products_per_row,
+            page_size=layout.page_size,
+            orientation=layout.orientation,
+            css_class=layout.css_class,
+        ),
         title="Catálogo",
         as_of_label=format_date(
             snapshot.as_of.date(), format="long", locale=babel_locale

@@ -1061,6 +1061,7 @@ class CatalogRenderConfig(StrictSchema):
     page_size: Literal["A4"] = "A4"
     orientation: Literal["portrait", "landscape"] = "portrait"
     template_key: NonEmptyText = "grabelan-catalog-v1"
+    layout: Literal["classic", "dense", "compact"] = "classic"
 
 
 class CatalogRenderJobPayload(StrictSchema):
@@ -1152,11 +1153,15 @@ class CatalogRenderJobPayloadV2(CatalogRenderJobPayload):
     branding_schema_version: Literal["catalog-branding-v1"]
     branding_hash: Sha256
     branding_data: ResolvedCatalogBranding
+    layout_key: Literal["classic", "dense", "compact"] = "classic"
+    layout_version: NonEmptyText = "1"
 
     @model_validator(mode="after")
     def validate_brand_lineage(self):
         if self.branding_data.source_profile_id != self.catalog_brand_profile_id or self.branding_data.schema_version != self.branding_schema_version:
             raise ValueError("frozen branding lineage does not match render Job")
+        if self.layout_key != self.config.layout:
+            raise ValueError("layout lineage does not match render configuration")
         return self
 
 
@@ -1167,6 +1172,15 @@ class CatalogBrandingView(StrictSchema):
     accent_color: CatalogBrandColor
     contact_text: Annotated[str, StringConstraints(min_length=1, max_length=500)] | None = None
     social_handle: Annotated[str, StringConstraints(min_length=1, max_length=255)] | None = None
+
+
+class CatalogRenderLayoutView(StrictSchema):
+    key: Literal["classic", "dense", "compact"]
+    version: NonEmptyText
+    products_per_row: Literal[2, 3, 4]
+    page_size: Literal["A4"]
+    orientation: Literal["portrait"]
+    css_class: Literal["layout-classic", "layout-dense", "layout-compact"]
 
 
 class CatalogRenderVariantView(StrictSchema):
@@ -1195,6 +1209,7 @@ class CatalogRenderViewModel(StrictSchema):
     orientation: Literal["portrait", "landscape"]
     store_name: NonEmptyText
     branding: CatalogBrandingView | None = None
+    layout: CatalogRenderLayoutView
     title: NonEmptyText
     as_of_label: NonEmptyText
     currency: CurrencyCode
@@ -1213,6 +1228,8 @@ class CatalogRenderRunRead(ReadSchema):
     renderer_engine_version: str | None
     locale: str
     config_hash: str
+    layout_key: str | None
+    layout_version: str | None
     catalog_brand_profile_id: uuid.UUID | None
     branding_schema_version: str | None
     branding_hash: str | None

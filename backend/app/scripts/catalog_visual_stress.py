@@ -1,3 +1,4 @@
+import argparse
 import base64
 import json
 import uuid
@@ -9,12 +10,14 @@ from PIL import Image, ImageDraw
 
 from app.domain.schemas import (
     CatalogRenderConfig,
+    CatalogRenderLayoutView,
     CatalogRenderProductView,
     CatalogRenderSectionView,
     CatalogRenderVariantView,
     CatalogRenderViewModel,
     ResolvedCatalogBranding,
 )
+from app.rendering.catalog_layouts import catalog_layout_definitions, resolve_catalog_layout
 from app.rendering.catalog_pdf import ChromiumCatalogPdfRenderer
 from app.services.catalog_rendering import (
     build_catalog_branding_view,
@@ -25,13 +28,35 @@ from app.services.catalog_rendering import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 OUTPUT_DIR = PROJECT_ROOT / "tmp" / "catalog-visual-stress"
-HTML_FILENAME = "catalog-v1-stress.html"
-PDF_FILENAME = "catalog-v1-stress.pdf"
 QA_NAMESPACE = uuid.UUID("4ecad6a8-7451-4219-a670-7883423e758c")
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Render disposable, database-free catalog layout stress previews."
+    )
+    parser.add_argument(
+        "--layout",
+        choices=[definition.key for definition in catalog_layout_definitions()] + ["all"],
+        default="classic",
+    )
+    return parser
+
+
 def main() -> None:
-    config = CatalogRenderConfig()
+    args = build_parser().parse_args()
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    layout_keys = (
+        [definition.key for definition in catalog_layout_definitions()]
+        if args.layout == "all"
+        else [args.layout]
+    )
+    results = [render_stress_layout(layout_key) for layout_key in layout_keys]
+    print(json.dumps(results, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def render_stress_layout(layout_key: str) -> dict[str, str | int | None]:
+    config = CatalogRenderConfig(layout=layout_key)
     template = resolve_catalog_template(config.template_key)
     view_model = build_stress_view_model(config)
     html = render_catalog_html(view_model, template)
@@ -40,31 +65,25 @@ def main() -> None:
     if page_count < 2:
         raise RuntimeError("stress preview must span at least two A4 pages")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    html_path = (OUTPUT_DIR / HTML_FILENAME).resolve()
-    pdf_path = (OUTPUT_DIR / PDF_FILENAME).resolve()
+    html_path = (OUTPUT_DIR / f"{layout_key}.html").resolve()
+    pdf_path = (OUTPUT_DIR / f"{layout_key}.pdf").resolve()
     html_path.write_text(html, encoding="utf-8")
     pdf_path.write_bytes(rendered.pdf_bytes)
-    print(
-        json.dumps(
-            {
-                "html_path": str(html_path),
-                "pdf_path": str(pdf_path),
-                "page_count": page_count,
-                "renderer_engine": rendered.engine,
-                "renderer_engine_version": rendered.engine_version,
-            },
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-    )
+    return {
+        "layout": layout_key,
+        "html_path": str(html_path),
+        "pdf_path": str(pdf_path),
+        "page_count": page_count,
+        "renderer_engine": rendered.engine,
+        "renderer_engine_version": rendered.engine_version,
+    }
 
 
 def build_stress_view_model(
     config: CatalogRenderConfig | None = None,
 ) -> CatalogRenderViewModel:
     resolved_config = config or CatalogRenderConfig()
+    layout = resolve_catalog_layout(resolved_config.layout)
     two_product_section = _section(
         "two-products",
         "[QA] Categoría de prueba con un nombre deliberadamente largo para revisar saltos de línea",
@@ -179,7 +198,15 @@ def build_stress_view_model(
             primary_color="#87663F", accent_color="#87663F",
             contact_text=None, social_handle=None, logo=None,
         )),
-        title="Prueba visual Classic",
+        layout=CatalogRenderLayoutView(
+            key=layout.key,
+            version=layout.version,
+            products_per_row=layout.products_per_row,
+            page_size=layout.page_size,
+            orientation=layout.orientation,
+            css_class=layout.css_class,
+        ),
+        title="Prueba visual de layouts",
         as_of_label="14 de septiembre de 2026",
         currency="PYG",
         sections=[

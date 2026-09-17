@@ -23,6 +23,8 @@ from app.domain.enums import (
 from app.domain.schemas import (
     CatalogHeroSnapshot,
     CatalogProductSnapshot,
+    CatalogRenderConfig,
+    CatalogRenderJobPayloadV2,
     CatalogSectionSnapshot,
     CatalogSnapshotData,
     CatalogVariantSnapshot,
@@ -37,6 +39,7 @@ from app.rendering.catalog_pdf import (
 from app.services.catalog_rendering import (
     CATALOG_RENDER_JOB_TYPE,
     CATALOG_RENDER_JOB_TYPE_V2,
+    build_catalog_render_idempotency_key,
     enqueue_catalog_render,
     enqueue_catalog_render_v2,
 )
@@ -370,10 +373,11 @@ def _create_publisher(factory, storage_root, key="grabelan", logo=None):
         return profile.id, asset.id if asset else None
 
 
-def _enqueue_v2(factory, storage_root, snapshot_id, profile_id):
+def _enqueue_v2(factory, storage_root, snapshot_id, profile_id, *, layout="classic"):
     with factory() as session:
         job = enqueue_catalog_render_v2(
             session, catalog_snapshot_id=snapshot_id, brand_profile_id=profile_id,
+            config=CatalogRenderConfig(layout=layout),
             storage_root=storage_root, template_root=TEMPLATE_ROOT,
         )
         session.commit()
@@ -416,6 +420,8 @@ def test_v2_freezes_branding_at_enqueue_and_does_not_hold_transaction_during_bro
         assert run.branding_schema_version == "catalog-branding-v1"
         assert run.branding_hash == original_payload["branding_hash"]
         assert run.branding_data == original_payload["branding_data"]
+        assert run.layout_key == "classic"
+        assert run.layout_version == "1"
         assert session.get(CatalogBrandProfile, profile_id).display_name == "Publisher C"
     html, _ = renderer.calls[0]
     assert "Publisher A" in html and "Publisher B" not in html and "Publisher C" not in html
@@ -442,6 +448,51 @@ def test_v2_idempotency_uses_profile_lineage_and_visual_branding_hash(store):
     assert changed_key != first_key
     with factory() as session:
         assert session.get(Job, first_job).job_type == CATALOG_RENDER_JOB_TYPE_V2
+
+
+def test_v2_layout_is_explicit_in_idempotency_and_successful_run_audit(store):
+    factory, storage_root, catalogs_dir = store
+    snapshot_id, _ = create_snapshot(factory, storage_root)
+    profile_id, _ = _create_publisher(factory, storage_root)
+
+    dense_id, dense_key, dense_data = _enqueue_v2(
+        factory, storage_root, snapshot_id, profile_id, layout="dense"
+    )
+    classic_id, classic_key, classic_data = _enqueue_v2(
+        factory, storage_root, snapshot_id, profile_id, layout="classic"
+    )
+    same_id, same_key, _ = _enqueue_v2(
+        factory, storage_root, snapshot_id, profile_id, layout="classic"
+    )
+    compact_id, compact_key, compact_data = _enqueue_v2(
+        factory, storage_root, snapshot_id, profile_id, layout="compact"
+    )
+
+    assert (classic_id, classic_key) == (same_id, same_key)
+    assert len({classic_id, dense_id, compact_id}) == 3
+    assert len({classic_key, dense_key, compact_key}) == 3
+    assert [(data["layout_key"], data["layout_version"]) for data in (classic_data, dense_data, compact_data)] == [
+        ("classic", "1"),
+        ("dense", "1"),
+        ("compact", "1"),
+    ]
+
+    future_dense = CatalogRenderJobPayloadV2.model_validate(dense_data).model_copy(
+        update={"layout_version": "2"}
+    )
+    assert build_catalog_render_idempotency_key(
+        future_dense, job_type=CATALOG_RENDER_JOB_TYPE_V2
+    ) != dense_key
+
+    renderer = FakeRenderer(valid_pdf())
+    _v2_worker(factory, storage_root, catalogs_dir, renderer).run_once()
+    with factory() as session:
+        dense_run = session.scalar(
+            select(CatalogRenderRun).where(CatalogRenderRun.job_id == dense_id)
+        )
+        assert dense_run.layout_key == "dense"
+        assert dense_run.layout_version == "1"
+    assert 'class="layout layout-dense"' in renderer.calls[0][0]
 
 
 def test_v2_logo_swap_does_not_change_queued_job_and_missing_frozen_logo_fails(store):

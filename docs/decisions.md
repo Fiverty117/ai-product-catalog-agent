@@ -179,3 +179,10 @@
 **Decision:** Current CatalogBrandProfile is separate from Product Brand and CatalogSnapshot. `catalog.render.v2` freezes a strict resolved publisher identity and logo locator/hash when enqueueing, then persists that payload on each CatalogRenderRun. The worker validates frozen branding and asset bytes without re-reading mutable profile state. Profile ID remains logical-request lineage; the visual branding hash excludes source row UUIDs. Existing `catalog.render.v1` Jobs/runs retain their original meaning and nullable branding audit fields.
 
 **Why:** One immutable commercial snapshot must be renderable under different current publishers/layouts without rewriting its content. Enqueue-time freezing prevents queued jobs and historical PDFs from drifting when a profile changes; content-addressed local logo assets keep renders offline and auditable.
+
+---
+
+## ADR-027 — Catalog layout is an explicit versioned render dimension
+**Decision:** `catalog.render.v2` selects exactly one built-in layout (`classic`, `dense` or `compact`) through a typed application registry. The layout key and semantic version participate explicitly in Job identity and are copied to nullable CatalogRenderRun audit fields; older runs remain readable with null layout audit. All layouts share the versioned catalog-v1 Jinja/CSS template and ProductRow pagination, while the registry supplies stable row geometry and a CSS modifier class.
+
+**Why:** Layout changes presentation density without changing frozen catalog content or publisher branding. Explicit semantic identity prevents different layouts from deduplicating into one Job, and separate template hashing still captures exact implementation bytes.

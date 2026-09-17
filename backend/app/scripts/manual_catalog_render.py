@@ -28,6 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--snapshot-id", required=True, type=uuid.UUID)
     parser.add_argument("--brand-key", required=True, help="Explicit active catalog publisher profile key.")
     parser.add_argument("--locale", default="es-PY")
+    parser.add_argument(
+        "--layout",
+        choices=("classic", "dense", "compact"),
+        default="classic",
+    )
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument(
         "--requeue-failed",
@@ -49,7 +54,7 @@ def main() -> None:
                 session,
                 catalog_snapshot_id=args.snapshot_id,
                 brand_profile_id=profile.id,
-                config=CatalogRenderConfig(locale=args.locale),
+                config=CatalogRenderConfig(locale=args.locale, layout=args.layout),
                 max_attempts=args.max_attempts,
             )
             if job.status is JobStatus.FAILED and args.requeue_failed:
@@ -60,6 +65,8 @@ def main() -> None:
             profile_id = profile.id
             profile_key = profile.key
             branding_hash = job.payload["branding_hash"]
+            layout_key = job.payload["layout_key"]
+            layout_version = job.payload["layout_version"]
 
         if status is JobStatus.QUEUED:
             _require_job_is_next_eligible(session_factory, job_id)
@@ -98,6 +105,8 @@ def main() -> None:
                         "brand_profile_id": str(profile_id),
                         "brand_key": profile_key,
                         "branding_hash": branding_hash,
+                        "layout": layout_key,
+                        "layout_version": layout_version,
                         "job_id": str(stored_job.id),
                         "job_status": stored_job.status.value,
                         "job_attempts": stored_job.attempts,
@@ -105,6 +114,8 @@ def main() -> None:
                         "render_run_id": str(run.id) if run else None,
                         "render_run_status": run.status.value if run else None,
                         "render_run_error": run.sanitized_error if run else None,
+                        "render_run_layout": run.layout_key if run else None,
+                        "render_run_layout_version": run.layout_version if run else None,
                         "catalog_artifact_id": str(artifact.id) if artifact else None,
                         "pdf_path": artifact.file_path if artifact else None,
                         "checksum_sha256": (
