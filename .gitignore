@@ -38,3 +38,6 @@ storage/catalogs/*
 coverage.xml
 htmlcov/
 tmp/
+
+backend/catalog.db-shm
+backend/catalog.db-wal

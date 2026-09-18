@@ -1,18 +1,13 @@
 # Frontend
 
-Planned stack: React + TypeScript + Vite.
+React + TypeScript + Vite workspace for the local Catalog Builder.
 
-The frontend stays intentionally thin and consumes backend-derived UI states.
+```powershell
+npm install
+npm run dev
+```
 
-Initial planned screens:
-- catalog list
-- upload/intake
-- processing progress
-- SKU review
-- metadata corrections
-- pricing
-- original vs edited image approval
-- catalog configuration
-- catalog preview/generation
+The Vite development server proxies `/api` reads to the FastAPI
+server at `http://127.0.0.1:8000`. Open `/catalog-builder` in the frontend.
 
-Frontend implementation begins after the backend domain contract and basic APIs are stable.
+Optional: set `VITE_API_BASE_URL` when the API is hosted on another origin.

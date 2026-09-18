@@ -1093,6 +1093,73 @@ class ProductCatalogReadiness(StrictSchema):
     warnings: list[CatalogReadinessIssue]
 
 
+class CatalogBuilderReadinessSummary(StrictSchema):
+    ready: bool
+    blockers: list[CatalogReadinessIssue]
+    warnings: list[CatalogReadinessIssue]
+    presentation_warnings: list[PhotoPresentationWarning]
+
+
+class CatalogBuilderSKUSummary(StrictSchema):
+    sku_id: uuid.UUID
+    variant_label: str
+    flavor: str | None
+    size_value: Decimal | None
+    size_unit: str | None
+    active_price_amount: Decimal
+    currency: CurrencyCode
+
+    @field_serializer("size_value", "active_price_amount")
+    def serialize_decimals(self, value: Decimal | None) -> str | None:
+        if value is None:
+            return None
+        return format(value, "f")
+
+
+class CatalogBuilderHeroSummary(StrictSchema):
+    source_photo_id: uuid.UUID
+    effective_derived_image_id: uuid.UUID | None
+    presentation_type: PhotoPresentationAssetType
+    image_url: str
+
+
+class CatalogBuilderProductSummary(StrictSchema):
+    product_id: uuid.UUID
+    product_name: str
+    brand_name: str
+    primary_category_id: uuid.UUID | None
+    primary_category_name: str | None
+    readiness: CatalogBuilderReadinessSummary
+    publishable_skus: list[CatalogBuilderSKUSummary]
+    hero: CatalogBuilderHeroSummary | None
+    copy_state: ProductCopyResolutionState
+    short_description: ProductShortDescription | None
+
+
+class CatalogBuilderProductList(StrictSchema):
+    currency: CurrencyCode
+    as_of: datetime
+    products: list[CatalogBuilderProductSummary]
+
+
+class CatalogBuilderBrandProfileSummary(StrictSchema):
+    id: uuid.UUID
+    key: str
+    display_name: str
+    logo_url: str | None
+    primary_color: str
+    accent_color: str
+
+
+class CatalogBuilderLayoutSummary(StrictSchema):
+    key: Literal["classic", "dense", "compact"]
+    version: str
+    display_label: str
+    products_per_row: int
+    page_size: Literal["A4"]
+    orientation: Literal["portrait"]
+
+
 class JobCreate(BaseModel):
     job_type: NonEmptyText
     payload: dict[str, Any]
