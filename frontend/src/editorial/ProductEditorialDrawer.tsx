@@ -4,6 +4,13 @@ import {
   ApiError,
   ProductCopyEditorialSummary,
   ProductSummary,
+  ProductDataSummary,
+  fetchProductData,
+  saveProductIdentity,
+  saveProductCategories,
+  saveProductSKU,
+  addProductSKU,
+  changeProductPrice,
   fetchProductCopyEditorial,
   generateProductCopy,
   resolveApiUrl,
@@ -13,6 +20,7 @@ import {
 } from "../api";
 import { CurrentProductCopy } from "./CurrentProductCopy";
 import { ProductCopyProposal } from "./ProductCopyProposal";
+import { ProductDataEditor } from "./ProductDataEditor";
 
 function formatPrice(amount: string, currency: string): string {
   if (currency !== "PYG") return `${currency} ${amount}`;
@@ -44,6 +52,7 @@ export function ProductEditorialDrawer({
   onProductUpdated: (product: ProductSummary) => void;
 }) {
   const [summary, setSummary] = useState<ProductCopyEditorialSummary | null>(null);
+  const [productData, setProductData] = useState<ProductDataSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -64,6 +73,7 @@ export function ProductEditorialDrawer({
   useEffect(() => {
     const controller = new AbortController();
     setSummary(null);
+    setProductData(null);
     setError(null);
     fetchProductCopyEditorial(productId, controller.signal)
       .then(applySummary)
@@ -72,6 +82,9 @@ export function ProductEditorialDrawer({
           setError("The Product editorial workspace could not be loaded.");
         }
       });
+    fetchProductData(productId, controller.signal)
+      .then(setProductData)
+      .catch((caught: unknown) => { if ((caught as Error).name !== "AbortError") setError("Product data could not be loaded."); });
     return () => controller.abort();
   }, [applySummary, productId]);
 
@@ -152,6 +165,29 @@ export function ProductEditorialDrawer({
     }
   };
 
+  const handleDataSave: React.ComponentProps<typeof ProductDataEditor>["onSave"] = async (action) => {
+    setBusyAction("product-data");
+    setError(null);
+    try {
+      let next: ProductDataSummary;
+      switch (action.kind) {
+        case "identity": next = await saveProductIdentity(productId, action.name, action.brandId); break;
+        case "categories": next = await saveProductCategories(productId, action.primaryId, action.secondaryIds); break;
+        case "sku": next = action.skuId ? await saveProductSKU(productId, action.skuId, action.fields) : await addProductSKU(productId, action.fields); break;
+        case "price": next = await changeProductPrice(productId, action.skuId, action.amount, action.currency); break;
+      }
+      setProductData(next);
+      onProductUpdated(next.product);
+      await refresh();
+      return true;
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "Product data could not be saved or refreshed.");
+      return false;
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   return (
     <div className="drawer-backdrop">
       <aside
@@ -163,7 +199,7 @@ export function ProductEditorialDrawer({
         <div className="drawer-toolbar">
           <div>
             <p className="section-kicker">Product editorial</p>
-            <h2 id="editorial-title">Review Product Copy</h2>
+            <h2 id="editorial-title">Product data and copy</h2>
           </div>
           <button type="button" className="drawer-close" onClick={onClose} aria-label="Close editorial workspace">
             Close
@@ -198,6 +234,8 @@ export function ProductEditorialDrawer({
                 </div>
               </div>
             </section>
+
+            {productData && <ProductDataEditor data={productData} saving={busyAction === "product-data"} onSave={handleDataSave} />}
 
             <CurrentProductCopy effectiveCopy={summary.effective_copy} saving={busyAction === "manual-save"} onSave={handleManualSave} />
 

@@ -80,7 +80,7 @@ function ProductCard({
               id={checkboxId}
               type="checkbox"
               checked={selected}
-              disabled={!product.readiness.ready}
+              disabled={!product.readiness.ready && !selected}
               onChange={(event) => onToggle(product, event.target.checked)}
             />
             Select
@@ -127,7 +127,7 @@ function ProductCard({
         </div>
         <div className="product-card-actions">
           <button type="button" onClick={() => onReviewCopy(product.product_id)}>
-            Review copy
+            Edit Product
           </button>
         </div>
       </div>
@@ -204,7 +204,7 @@ export function CatalogBuilderPage() {
   const readyCount = products?.filter((product) => product.readiness.ready).length ?? 0;
 
   const handleToggle = (product: ProductSummary, checked: boolean) => {
-    if (!product.readiness.ready) return;
+    if (!product.readiness.ready && checked) return;
     setSelectedIds((current) => {
       const next = new Set(current);
       if (checked) next.add(product.product_id);

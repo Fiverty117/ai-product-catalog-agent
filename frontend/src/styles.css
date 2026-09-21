@@ -776,6 +776,26 @@ select:disabled {
   gap: 8px;
 }
 
+.product-data-group {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #e0e7e2;
+}
+
+.product-data-group h4 { margin: 0 0 9px; }
+.product-data-group p { margin: 7px 0; }
+.product-data-fields { display: grid; gap: 9px; margin: 10px 0; }
+.product-data-fields label, .product-data-group > div > label { display: grid; gap: 4px; }
+.product-data-fields input, .product-data-fields select, .product-data-group select {
+  width: 100%; padding: 8px; border: 1px solid #c8d2cd; border-radius: 6px;
+  color: #23332b; background: #fff; font: inherit;
+}
+.product-data-group fieldset { display: grid; gap: 6px; margin: 10px 0; border: 1px solid #dfe5e2; border-radius: 6px; }
+.product-data-group fieldset label { display: flex; gap: 7px; align-items: center; }
+.product-data-sku { margin: 12px 0; padding: 12px; border: 1px solid #dfe5e2; border-radius: 7px; }
+.product-data-actions { display: flex; justify-content: flex-end; gap: 8px; margin: 10px 0; }
+.product-data details { margin-top: 9px; color: #58645e; }
+
 .correction-meta {
   display: flex;
   gap: 16px;

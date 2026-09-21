@@ -133,6 +133,7 @@ class Product(Base):
     product_copy_manual_revisions: Mapped[list["ProductCopyManualRevision"]] = relationship(
         back_populates="product"
     )
+    identity_edits: Mapped[list["ProductIdentityEdit"]] = relationship(back_populates="product")
     identity_resolutions: Mapped[list["ExtractionIdentityResolution"]] = relationship(
         back_populates="product"
     )
@@ -142,6 +143,18 @@ class Product(Base):
         cleaned = " ".join(value.split())
         self.identity_key = identity_key_v1(cleaned) if cleaned else ""
         return cleaned
+
+
+class ProductIdentityEdit(Base):
+    __tablename__ = "product_identity_edits"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("products.id"), nullable=False, index=True)
+    old_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    new_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    old_brand_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("brands.id"), nullable=False)
+    new_brand_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("brands.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+    product: Mapped[Product] = relationship(back_populates="identity_edits")
 
 
 class Category(Base):

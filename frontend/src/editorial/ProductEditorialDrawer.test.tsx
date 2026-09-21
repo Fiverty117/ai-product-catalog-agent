@@ -14,6 +14,12 @@ const apiMocks = vi.hoisted(() => ({
   retryProductCopyGeneration: vi.fn(),
   reviewProductCopy: vi.fn(),
   saveManualProductCopyRevision: vi.fn(),
+  fetchProductData: vi.fn(),
+  saveProductIdentity: vi.fn(),
+  saveProductCategories: vi.fn(),
+  saveProductSKU: vi.fn(),
+  addProductSKU: vi.fn(),
+  changeProductPrice: vi.fn(),
 }));
 
 vi.mock("../api", async () => {
@@ -101,6 +107,13 @@ function renderDrawer(onClose = vi.fn(), onProductUpdated = vi.fn()) {
 }
 
 beforeEach(() => {
+  apiMocks.fetchProductData.mockResolvedValue({
+    product, brand_id: "brand-1", brands: [{ brand_id: "brand-1", name: "Landerfit" }],
+    categories: [{ category_id: "category-1", name: "Proteínas", assigned: true, is_primary: true }],
+    skus: [{ sku_id: "sku-1", flavor: "Vanilla", size_value: "2", size_unit: "LB", servings: 30, external_sku: null,
+      active_price: { price_id: "price-1", amount: "360000.0000", currency: "PYG", valid_from: "2026-09-18T12:00:00Z", source: "human", approved: true }, price_history: [] }],
+    identity_history: [],
+  });
   apiMocks.saveManualProductCopyRevision.mockReset();
   apiMocks.fetchProductCopyEditorial.mockResolvedValue(summary());
   apiMocks.generateProductCopy.mockResolvedValue({
@@ -133,6 +146,18 @@ beforeEach(() => {
 });
 
 describe("ProductEditorialDrawer", () => {
+  it("keeps the Product draft on backend conflict and prevents a duplicate save", async () => {
+    let rejectSave!: (reason: Error) => void;
+    apiMocks.saveProductIdentity.mockReturnValue(new Promise((_resolve, reject) => { rejectSave = reject; }));
+    const user = userEvent.setup();
+    renderDrawer();
+    await user.click(await screen.findByRole("button", { name: "Edit Product" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
+    rejectSave(new Error("identity conflict"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Product data could not be saved or refreshed.");
+    expect(screen.getByRole("textbox", { name: "Product name" })).toHaveValue("Premium Whey");
+  });
   it("edits current copy with cancel, validation, and save", async () => {
     const user = userEvent.setup();
     const updated = summary("current", {

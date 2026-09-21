@@ -128,6 +128,48 @@ export type ProductCopyReviewResponse = {
   editorial: ProductCopyEditorialSummary;
 };
 
+export type ProductDataSummary = {
+  product: ProductSummary;
+  brand_id: string;
+  brands: { brand_id: string; name: string }[];
+  categories: { category_id: string; name: string; is_primary: boolean; assigned: boolean }[];
+  skus: {
+    sku_id: string; external_sku: string | null; flavor: string | null;
+    size_value: string | null; size_unit: string | null; servings: number | null;
+    active_price: ProductDataPrice | null; price_history: ProductDataPrice[];
+  }[];
+  identity_history: { old_name: string; new_name: string; old_brand_id: string; new_brand_id: string; created_at: string }[];
+};
+
+export type ProductDataPrice = {
+  price_id: string; amount: string; currency: string; valid_from: string;
+  source: string; approved: boolean;
+};
+
+export type SKUDataInput = {
+  external_sku: string | null; flavor: string | null; size_value: string | null;
+  size_unit: string | null; servings: number | null;
+};
+
+export function fetchProductData(productId: string, signal?: AbortSignal): Promise<ProductDataSummary> {
+  return getJson(`/api/products/${productId}/data`, signal);
+}
+
+function saveProductData(productId: string, path: string, method: "PUT" | "POST", body: object): Promise<ProductDataSummary> {
+  return requestJson(`/api/products/${productId}/data/${path}`, { method, body: JSON.stringify(body) });
+}
+
+export const saveProductIdentity = (productId: string, name: string, brandId: string) =>
+  saveProductData(productId, "identity", "PUT", { name, brand_id: brandId });
+export const saveProductCategories = (productId: string, primaryId: string | null, secondaryIds: string[]) =>
+  saveProductData(productId, "categories", "PUT", { primary_category_id: primaryId, secondary_category_ids: secondaryIds });
+export const saveProductSKU = (productId: string, skuId: string, fields: SKUDataInput) =>
+  saveProductData(productId, `skus/${skuId}`, "PUT", fields);
+export const addProductSKU = (productId: string, fields: SKUDataInput) =>
+  saveProductData(productId, "skus", "POST", fields);
+export const changeProductPrice = (productId: string, skuId: string, amount: string, currency: string) =>
+  saveProductData(productId, `skus/${skuId}/prices`, "POST", { amount, currency });
+
 const apiBase = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
 export function resolveApiUrl(path: string): string {

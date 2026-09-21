@@ -1244,6 +1244,93 @@ class ProductCopyReviewResponse(StrictSchema):
     editorial: ProductCopyEditorialSummary
 
 
+class ProductIdentityEditRequest(StrictSchema):
+    name: str
+    brand_id: uuid.UUID
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return clean_identity_display_name(value)
+
+
+class ProductCategoryEditRequest(StrictSchema):
+    primary_category_id: uuid.UUID | None
+    secondary_category_ids: list[uuid.UUID]
+
+    @model_validator(mode="after")
+    def unique_selection(self):
+        ids = ([self.primary_category_id] if self.primary_category_id else []) + self.secondary_category_ids
+        if len(ids) != len(set(ids)):
+            raise ValueError("Category selection must be unique")
+        return self
+
+
+class ProductSKUEditRequest(StrictSchema):
+    external_sku: NonEmptyText | None = None
+    flavor: NonEmptyText | None = None
+    size_value: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=6)
+    size_unit: NonEmptyText | None = None
+    servings: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def paired_size(self):
+        if (self.size_value is None) != (self.size_unit is None):
+            raise ValueError("size_value and size_unit must be supplied together")
+        return self
+
+
+class ProductPriceEditRequest(StrictSchema):
+    amount: Decimal = Field(ge=0, max_digits=18, decimal_places=4)
+    currency: CurrencyCode
+
+    @field_validator("currency")
+    @classmethod
+    def uppercase_currency(cls, value: str) -> str:
+        return value.upper()
+
+
+class ProductDataBrandSummary(StrictSchema):
+    brand_id: uuid.UUID
+    name: str
+
+
+class ProductDataCategorySummary(StrictSchema):
+    category_id: uuid.UUID
+    name: str
+    is_primary: bool
+    assigned: bool
+
+
+class ProductDataPriceSummary(StrictSchema):
+    price_id: uuid.UUID
+    amount: Decimal
+    currency: str
+    valid_from: datetime
+    source: str
+    approved: bool
+
+
+class ProductDataSKUSummary(StrictSchema):
+    sku_id: uuid.UUID
+    external_sku: str | None
+    flavor: str | None
+    size_value: Decimal | None
+    size_unit: str | None
+    servings: int | None
+    active_price: ProductDataPriceSummary | None
+    price_history: list[ProductDataPriceSummary]
+
+
+class ProductDataSummary(StrictSchema):
+    product: CatalogBuilderProductSummary
+    brand_id: uuid.UUID
+    brands: list[ProductDataBrandSummary]
+    categories: list[ProductDataCategorySummary]
+    skus: list[ProductDataSKUSummary]
+    identity_history: list[dict[str, str]]
+
+
 class JobCreate(BaseModel):
     job_type: NonEmptyText
     payload: dict[str, Any]
