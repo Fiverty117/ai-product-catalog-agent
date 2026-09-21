@@ -34,6 +34,7 @@ class JobWorker:
         session_factory: SessionFactory,
         handlers: Mapping[str, JobHandler],
         *,
+        accepted_job_types: set[str] | None = None,
         clock: Clock = utc_now,
         retry_base: timedelta = timedelta(seconds=5),
         retry_cap: timedelta = timedelta(minutes=5),
@@ -44,6 +45,9 @@ class JobWorker:
             raise ValueError("retry_cap must be at least retry_base")
         self._session_factory = session_factory
         self._handlers = dict(handlers)
+        self._accepted_job_types = (
+            frozenset(accepted_job_types) if accepted_job_types is not None else None
+        )
         self._clock = clock
         self._retry_base = retry_base
         self._retry_cap = retry_cap
@@ -102,15 +106,13 @@ class JobWorker:
     def _claim_one(self) -> ClaimedJob | None:
         now = self._clock()
         with self._session_factory() as session:
-            job = session.scalar(
-                select(Job)
-                .where(
-                    Job.status == JobStatus.QUEUED,
-                    or_(Job.next_retry_at.is_(None), Job.next_retry_at <= now),
-                )
-                .order_by(Job.created_at, Job.id)
-                .limit(1)
+            query = select(Job).where(
+                Job.status == JobStatus.QUEUED,
+                or_(Job.next_retry_at.is_(None), Job.next_retry_at <= now),
             )
+            if self._accepted_job_types is not None:
+                query = query.where(Job.job_type.in_(self._accepted_job_types))
+            job = session.scalar(query.order_by(Job.created_at, Job.id).limit(1))
             if job is None:
                 return None
 

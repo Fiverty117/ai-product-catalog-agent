@@ -2,12 +2,22 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BrandProfile, CatalogLayout, ProductSummary } from "./api";
+import type {
+  BrandProfile,
+  CatalogLayout,
+  ProductCopyEditorialSummary,
+  ProductSummary,
+} from "./api";
 
 const apiMocks = vi.hoisted(() => ({
   fetchProducts: vi.fn(),
   fetchBrandProfiles: vi.fn(),
   fetchLayouts: vi.fn(),
+  fetchProductCopyEditorial: vi.fn(),
+  generateProductCopy: vi.fn(),
+  retryProductCopyGeneration: vi.fn(),
+  reviewProductCopy: vi.fn(),
+  saveManualProductCopyRevision: vi.fn(),
 }));
 
 vi.mock("./api", async () => {
@@ -89,6 +99,10 @@ beforeEach(() => {
     as_of: "2026-09-17T12:00:00Z",
     products: search ? allProducts.filter((item) => item.product_name.toLowerCase().includes(search.toLowerCase())) : allProducts,
   }));
+  apiMocks.fetchProductCopyEditorial.mockReset();
+  apiMocks.generateProductCopy.mockReset();
+  apiMocks.retryProductCopyGeneration.mockReset();
+  apiMocks.reviewProductCopy.mockReset();
 });
 
 describe("CatalogBuilderPage", () => {
@@ -134,5 +148,103 @@ describe("CatalogBuilderPage", () => {
     expect(within(summary).getByText("Columns").nextElementSibling).toHaveTextContent("3");
     expect(within(returnedCard).getByRole("checkbox")).toBeChecked();
     expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+  });
+
+  it("opens editorial review, syncs approved copy, and preserves Builder selection", async () => {
+    const user = userEvent.setup();
+    const editorialProduct = product("editorial", "Editorial Whey", true, "none");
+    const pendingSummary: ProductCopyEditorialSummary = {
+      product: editorialProduct,
+      effective_copy: { state: "none", short_description: null },
+      generations: [],
+      manual_revisions: [],
+      runs: [{
+        run_id: "run-editorial",
+        job_id: "job-editorial",
+        status: "succeeded",
+        review_state: "unreviewed",
+        generated_text: "Clean protein copy ready for approval.",
+        sanitized_error: null,
+        source_state: "current",
+        review: null,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        created_at: "2026-09-18T12:00:00Z",
+        completed_at: "2026-09-18T12:00:05Z",
+      }],
+      has_active_generation: false,
+    };
+    const approvedProduct = {
+      ...editorialProduct,
+      copy_state: "current" as const,
+      short_description: "Clean protein copy ready for approval.",
+    };
+    const approvedSummary: ProductCopyEditorialSummary = {
+      ...pendingSummary,
+      product: approvedProduct,
+      effective_copy: {
+        state: "current",
+        short_description: "Clean protein copy ready for approval.",
+      },
+      runs: [{
+        ...pendingSummary.runs[0],
+        review_state: "approved",
+        review: {
+          decision: "approved",
+          corrected_short_description: null,
+          created_at: "2026-09-18T12:01:00Z",
+        },
+      }],
+    };
+    apiMocks.fetchProducts.mockResolvedValue({
+      currency: "PYG",
+      as_of: "2026-09-18T12:00:00Z",
+      products: [editorialProduct],
+    });
+    apiMocks.fetchProductCopyEditorial.mockResolvedValue(pendingSummary);
+    apiMocks.reviewProductCopy.mockResolvedValue({
+      review: approvedSummary.runs[0].review,
+      editorial: approvedSummary,
+    });
+
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Editorial Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(within(card).getByRole("button", { name: "Review copy" }));
+    expect(await screen.findByRole("dialog", { name: "Review Product Copy" })).toBeVisible();
+    expect(screen.getByText("No approved Product description yet.")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    expect(await screen.findByText(
+      "Clean protein copy ready for approval.",
+      { selector: ".current-copy-text" },
+    )).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Close editorial workspace" }));
+
+    const updatedCard = screen.getByRole("heading", { name: "Editorial Whey" }).closest("article")!;
+    expect(within(updatedCard).getByRole("checkbox")).toBeChecked();
+    expect(within(updatedCard).getByText("Copy: Current")).toBeVisible();
+    expect(within(updatedCard).getByText("Clean protein copy ready for approval.")).toBeVisible();
+
+    const manualProduct = { ...approvedProduct, short_description: "Human wording." };
+    apiMocks.fetchProductCopyEditorial.mockResolvedValue(approvedSummary);
+    apiMocks.saveManualProductCopyRevision.mockResolvedValue({
+      editorial: {
+        ...approvedSummary,
+        product: manualProduct,
+        effective_copy: { state: "current", short_description: "Human wording." },
+        manual_revisions: [{ revision_id: "manual-1", short_description: "Human wording.", source_state: "current", created_at: "2026-09-18T13:00:00Z" }],
+      },
+    });
+    await user.click(within(updatedCard).getByRole("button", { name: "Review copy" }));
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    const editBox = screen.getByRole("textbox", { name: "Edit current description" });
+    await user.clear(editBox);
+    await user.type(editBox, "Human wording.");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText("Human wording.", { selector: ".current-copy-text" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Close editorial workspace" }));
+    expect(within(updatedCard).getByRole("checkbox")).toBeChecked();
+    expect(within(updatedCard).getByText("Human wording.")).toBeVisible();
   });
 });

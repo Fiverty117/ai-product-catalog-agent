@@ -14,6 +14,8 @@ from app.db import (
     Price,
     Product,
     ProductCopyReview,
+    ProductCopyManualRevision,
+    CatalogSnapshot,
     ProductCopyRun,
     SKU,
 )
@@ -46,6 +48,8 @@ from app.services.product_copy_review import (
     apply_product_copy_review,
     resolve_effective_product_copy,
 )
+from app.services.product_copy_editorial import create_manual_product_copy_revision, NoCurrentProductCopyError
+from app.domain.schemas import ProductCopyManualRevisionRequest
 from app.scripts.manual_catalog_snapshot import build_parser as snapshot_parser
 from app.scripts.manual_openai_product_copy import build_parser as generation_parser
 from app.scripts.manual_product_copy import build_parser as review_parser
@@ -368,3 +372,50 @@ def test_manual_workflow_parsers_are_narrow_and_typed() -> None:
     assert snapshot_parser().parse_args(
         ["--product-id", product_id]
     ).product_id == [uuid.UUID(product_id)]
+
+
+def test_manual_revisions_preserve_ai_history_and_resolve_by_editorial_time(session: Session) -> None:
+    product, *_ = make_context(session)
+    snapshot = CatalogSnapshot(schema_version="catalog-snapshot-v1", currency="PYG", as_of=NOW, payload={"copy": "Frozen historical copy."}, content_hash="a" * 64)
+    session.add(snapshot)
+    session.flush()
+    snapshot_payload = dict(snapshot.payload)
+    with pytest.raises(NoCurrentProductCopyError):
+        create_manual_product_copy_revision(session, product_id=product.id, request=ProductCopyManualRevisionRequest(short_description="Early text."))
+    run = succeeded_run(session, product, "AI original.")
+    ai_review = review(session, run, ProductCopyReviewDecision.APPROVED)
+    ai_review.applied_at = NOW
+    session.flush()
+    original_name = product.name
+    first = create_manual_product_copy_revision(session, product_id=product.id, request=ProductCopyManualRevisionRequest(short_description="  Human   wording.  "))
+    first.created_at = NOW + timedelta(minutes=1)
+    session.flush()
+    assert first.short_description == "Human wording."
+    assert resolve_effective_product_copy(session, product.id).short_description == "Human wording."
+    second = create_manual_product_copy_revision(session, product_id=product.id, request=ProductCopyManualRevisionRequest(short_description="Second wording."))
+    second.created_at = NOW + timedelta(minutes=2)
+    session.flush()
+    resolved = resolve_effective_product_copy(session, product.id)
+    assert resolved.product_copy_manual_revision_id == second.id
+    assert run.generated_text == "AI original."
+    assert ai_review.decision is ProductCopyReviewDecision.APPROVED
+    assert first.short_description == "Human wording."
+    assert product.name == original_name
+    assert snapshot.payload == snapshot_payload
+    later_run = succeeded_run(session, product, "Later AI proposal.")
+    later_review = review(session, later_run, ProductCopyReviewDecision.APPROVED)
+    later_review.applied_at = NOW + timedelta(minutes=3)
+    session.flush()
+    assert resolve_effective_product_copy(session, product.id).short_description == "Later AI proposal."
+    product.name = "Changed canonical facts"
+    session.flush()
+    assert resolve_effective_product_copy(session, product.id).state is ProductCopyResolutionState.STALE
+    assert session.scalars(select(ProductCopyManualRevision)).all() == [first, second]
+
+
+def test_manual_revision_validation_and_unknown_product(session: Session) -> None:
+    for text in ("", " ", "x" * 181):
+        with pytest.raises(ValidationError):
+            ProductCopyManualRevisionRequest(short_description=text)
+    with pytest.raises(ValueError, match="Product not found"):
+        create_manual_product_copy_revision(session, product_id=uuid.uuid4(), request=ProductCopyManualRevisionRequest(short_description="Valid."))

@@ -132,6 +132,24 @@ def list_catalog_builder_layouts() -> list[CatalogBuilderLayoutSummary]:
     ]
 
 
+def get_catalog_builder_product_summary(
+    session: Session,
+    *,
+    product_id: uuid.UUID,
+    currency: str = "PYG",
+    as_of: datetime | None = None,
+) -> CatalogBuilderProductSummary:
+    product = session.get(Product, product_id)
+    if product is None:
+        raise UnknownCatalogBuilderProductError(f"Product not found: {product_id}")
+    return _build_product_summary(
+        session,
+        product=product,
+        currency=currency,
+        as_of=(as_of or utc_now()).astimezone(timezone.utc),
+    )
+
+
 def resolve_catalog_builder_product_image(
     session: Session,
     *,

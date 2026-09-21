@@ -9,6 +9,17 @@ after the claim transaction is committed and closed. Raising `PermanentJobError`
 marks the Job failed immediately; other errors use the existing bounded retry
 schedule.
 
+For the local Product Copy editorial queue, set `OPENAI_API_KEY` and run from
+`backend`:
+
+```powershell
+python -m app.scripts.run_product_copy_worker
+```
+
+This process continuously polls only `product.copy.v1` Jobs, so it cannot claim
+unrelated queued work. Use `--once` for a single claim attempt during a smoke
+test.
+
 For an explicit real category-suggestion smoke attempt after migrations are at
 head, set `OPENAI_API_KEY` and run from `backend`:
 

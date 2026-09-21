@@ -130,6 +130,9 @@ class Product(Base):
     product_copy_runs: Mapped[list["ProductCopyRun"]] = relationship(
         back_populates="product"
     )
+    product_copy_manual_revisions: Mapped[list["ProductCopyManualRevision"]] = relationship(
+        back_populates="product"
+    )
     identity_resolutions: Mapped[list["ExtractionIdentityResolution"]] = relationship(
         back_populates="product"
     )
@@ -938,6 +941,25 @@ class ProductCopyRun(Base):
     review: Mapped["ProductCopyReview | None"] = relationship(
         back_populates="product_copy_run", uselist=False
     )
+
+
+class ProductCopyManualRevision(Base):
+    __tablename__ = "product_copy_manual_revisions"
+    __table_args__ = (
+        CheckConstraint("length(trim(short_description)) > 0 AND length(short_description) <= 180", name="ck_product_copy_manual_revisions_text"),
+        CheckConstraint("length(source_fingerprint) = 64 AND source_fingerprint NOT GLOB '*[^0-9a-fA-F]*'", name="ck_product_copy_manual_revisions_fingerprint"),
+        Index("ix_product_copy_manual_revisions_product_id", "product_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("products.id"), nullable=False)
+    copy_type: Mapped[ProductCopyType] = mapped_column(Enum(ProductCopyType, name="product_copy_manual_revision_type", native_enum=False, create_constraint=True, values_callable=lambda members: [member.value for member in members]), nullable=False)
+    short_description: Mapped[str] = mapped_column(Text, nullable=False)
+    source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+
+    product: Mapped[Product] = relationship(back_populates="product_copy_manual_revisions")
 
 
 class ProductCopyReview(Base):

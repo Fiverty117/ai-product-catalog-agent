@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Product, ProductCopyReview, ProductCopyRun
+from app.db.models import Product, ProductCopyManualRevision, ProductCopyReview, ProductCopyRun
 from app.db.types import utc_now
 from app.domain.enums import (
     ExtractionRunStatus,
@@ -122,33 +122,39 @@ def resolve_effective_product_copy(
                 )
             ),
         )
-        .order_by(ProductCopyReview.created_at.desc(), ProductCopyReview.id.desc())
     ).all()
-    latest_stale: tuple[ProductCopyReview, ProductCopyRun] | None = None
-    for review, run in rows:
-        if latest_stale is None:
-            latest_stale = (review, run)
-        if run.source_fingerprint.lower() == current_fingerprint:
-            return _resolved_copy(
-                product_id,
-                ProductCopyResolutionState.CURRENT,
-                review,
-                run,
-            )
-    if latest_stale is not None:
-        review, run = latest_stale
-        return _resolved_copy(
-            product_id,
-            ProductCopyResolutionState.STALE,
-            review,
-            run,
-        )
+    revisions = session.scalars(
+        select(ProductCopyManualRevision).where(ProductCopyManualRevision.product_id == product_id)
+    ).all()
+    # Editorial decision time wins. On equal timestamps human revisions win;
+    # UUID is the final stable tie-breaker. Current facts outrank stale history.
+    candidates = [
+        (review.applied_at, 0, str(review.id), run.source_fingerprint.lower(), review, run)
+        for review, run in rows
+    ] + [
+        (revision.created_at, 1, str(revision.id), revision.source_fingerprint.lower(), revision, None)
+        for revision in revisions
+    ]
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    for state, eligible in ((ProductCopyResolutionState.CURRENT, True), (ProductCopyResolutionState.STALE, False)):
+        for _, _, _, fingerprint, source, run in candidates:
+            if (fingerprint == current_fingerprint) == eligible:
+                if run is None:
+                    return EffectiveProductCopy(
+                        product_id=product_id, state=state,
+                        short_description=source.short_description,
+                        product_copy_run_id=None, product_copy_review_id=None,
+                        product_copy_manual_revision_id=source.id,
+                        source_fingerprint=source.source_fingerprint,
+                    )
+                return _resolved_copy(product_id, state, source, run)
     return EffectiveProductCopy(
         product_id=product_id,
         state=ProductCopyResolutionState.NONE,
         short_description=None,
         product_copy_run_id=None,
         product_copy_review_id=None,
+        product_copy_manual_revision_id=None,
         source_fingerprint=None,
     )
 

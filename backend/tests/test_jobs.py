@@ -310,3 +310,28 @@ def test_unknown_job_type_fails_safely(job_store) -> None:
     assert failed.last_error == (
         "UnknownJobTypeError: no handler registered for job type: unknown.operation"
     )
+
+
+def test_worker_can_claim_only_explicitly_accepted_job_types(job_store) -> None:
+    _, session_factory = job_store
+    unrelated = persist_job(
+        session_factory,
+        job_type="image.enhance.v1",
+        idempotency_key="unrelated",
+    )
+    product_copy = persist_job(
+        session_factory,
+        job_type="product.copy.v1",
+        idempotency_key="product-copy",
+    )
+    handled = []
+    worker = JobWorker(
+        session_factory,
+        {"product.copy.v1": lambda job: handled.append(job.id)},
+        accepted_job_types={"product.copy.v1"},
+    )
+
+    assert worker.run_once() == product_copy.id
+    assert handled == [product_copy.id]
+    assert load_job(session_factory, product_copy.id).status is JobStatus.SUCCEEDED
+    assert load_job(session_factory, unrelated.id).status is JobStatus.QUEUED

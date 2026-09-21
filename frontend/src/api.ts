@@ -66,21 +66,111 @@ export type CatalogLayout = {
   orientation: "portrait";
 };
 
+export type ProductCopyReviewState = "unreviewed" | "approved" | "corrected" | "rejected";
+
+export type ProductCopyEditorialReview = {
+  decision: "approved" | "corrected" | "rejected";
+  corrected_short_description: string | null;
+  created_at: string;
+};
+
+export type ProductCopyEditorialRun = {
+  run_id: string;
+  job_id: string | null;
+  status: "running" | "succeeded" | "failed";
+  review_state: ProductCopyReviewState;
+  generated_text: string | null;
+  sanitized_error: string | null;
+  source_state: "current" | "stale";
+  review: ProductCopyEditorialReview | null;
+  provider: string;
+  model: string;
+  created_at: string;
+  completed_at: string | null;
+};
+
+export type ProductCopyGeneration = {
+  job_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  attempts: number;
+  max_attempts: number;
+  can_retry: boolean;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+};
+
+export type ProductCopyEditorialSummary = {
+  product: ProductSummary;
+  effective_copy: {
+    state: "current" | "stale" | "none";
+    short_description: string | null;
+  };
+  generations: ProductCopyGeneration[];
+  runs: ProductCopyEditorialRun[];
+  manual_revisions: {
+    revision_id: string;
+    short_description: string;
+    source_state: "current" | "stale";
+    created_at: string;
+  }[];
+  has_active_generation: boolean;
+};
+
+export type ProductCopyGenerationResponse = {
+  generation: ProductCopyGeneration;
+  editorial: ProductCopyEditorialSummary;
+};
+
+export type ProductCopyReviewResponse = {
+  review: ProductCopyEditorialReview;
+  editorial: ProductCopyEditorialSummary;
+};
+
 const apiBase = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
 export function resolveApiUrl(path: string): string {
   return `${apiBase}${path}`;
 }
 
-async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function requestJson<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
   const response = await fetch(resolveApiUrl(path), {
     headers: { Accept: "application/json" },
-    signal,
+    ...options,
+    ...(options.body
+      ? { headers: { Accept: "application/json", "Content-Type": "application/json", ...options.headers } }
+      : {}),
   });
   if (!response.ok) {
-    throw new Error(`Request failed (${response.status})`);
+    let detail = `Request failed (${response.status})`;
+    try {
+      const payload = (await response.json()) as { detail?: string | { msg?: string }[] };
+      if (typeof payload.detail === "string") detail = payload.detail;
+      else if (Array.isArray(payload.detail) && typeof payload.detail[0]?.msg === "string") detail = payload.detail[0].msg;
+    } catch {
+      // Keep the concise status fallback when a response is not JSON.
+    }
+    throw new ApiError(response.status, detail);
   }
   return response.json() as Promise<T>;
+}
+
+function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return requestJson<T>(path, { signal });
 }
 
 export function fetchProducts(
@@ -99,4 +189,64 @@ export function fetchBrandProfiles(signal?: AbortSignal): Promise<BrandProfile[]
 
 export function fetchLayouts(signal?: AbortSignal): Promise<CatalogLayout[]> {
   return getJson<CatalogLayout[]>("/api/catalog-builder/layouts", signal);
+}
+
+export function fetchProductCopyEditorial(
+  productId: string,
+  signal?: AbortSignal,
+): Promise<ProductCopyEditorialSummary> {
+  return getJson<ProductCopyEditorialSummary>(
+    `/api/products/${productId}/product-copy`,
+    signal,
+  );
+}
+
+export function generateProductCopy(
+  productId: string,
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<ProductCopyGenerationResponse> {
+  return requestJson<ProductCopyGenerationResponse>(
+    `/api/products/${productId}/product-copy/generations`,
+    { method: "POST", headers: { "Idempotency-Key": idempotencyKey } },
+  );
+}
+
+export function retryProductCopyGeneration(
+  productId: string,
+  jobId: string,
+): Promise<ProductCopyGenerationResponse> {
+  return requestJson<ProductCopyGenerationResponse>(
+    `/api/products/${productId}/product-copy/generations/${jobId}/retry`,
+    { method: "POST" },
+  );
+}
+
+export function reviewProductCopy(
+  productId: string,
+  runId: string,
+  decision: "approved" | "corrected" | "rejected",
+  correctedShortDescription?: string,
+): Promise<ProductCopyReviewResponse> {
+  return requestJson<ProductCopyReviewResponse>(
+    `/api/products/${productId}/product-copy/runs/${runId}/review`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        decision,
+        ...(decision === "corrected"
+          ? { corrected_short_description: correctedShortDescription }
+          : {}),
+      }),
+    },
+  );
+}
+
+export function saveManualProductCopyRevision(
+  productId: string,
+  shortDescription: string,
+): Promise<{ editorial: ProductCopyEditorialSummary }> {
+  return requestJson(`/api/products/${productId}/product-copy/manual-revisions`, {
+    method: "POST",
+    body: JSON.stringify({ short_description: shortDescription }),
+  });
 }

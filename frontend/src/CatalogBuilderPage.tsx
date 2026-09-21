@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   BrandProfile,
@@ -9,6 +9,7 @@ import {
   fetchProducts,
   resolveApiUrl,
 } from "./api";
+import { ProductEditorialDrawer } from "./editorial/ProductEditorialDrawer";
 
 type ReadinessFilter = "all" | "ready" | "not_ready";
 
@@ -52,10 +53,12 @@ function ProductCard({
   product,
   selected,
   onToggle,
+  onReviewCopy,
 }: {
   product: ProductSummary;
   selected: boolean;
   onToggle: (product: ProductSummary, checked: boolean) => void;
+  onReviewCopy: (productId: string) => void;
 }) {
   const checkboxId = `select-${product.product_id}`;
   return (
@@ -122,6 +125,11 @@ function ProductCard({
             ))
           )}
         </div>
+        <div className="product-card-actions">
+          <button type="button" onClick={() => onReviewCopy(product.product_id)}>
+            Review copy
+          </button>
+        </div>
       </div>
     </article>
   );
@@ -139,6 +147,7 @@ export function CatalogBuilderPage() {
   const [layoutKey, setLayoutKey] = useState<CatalogLayout["key"]>("classic");
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [editorialProductId, setEditorialProductId] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -209,6 +218,19 @@ export function CatalogBuilderPage() {
       return next;
     });
   };
+
+  const handleProductUpdated = useCallback((product: ProductSummary) => {
+    setProducts((current) =>
+      current?.map((item) =>
+        item.product_id === product.product_id ? product : item,
+      ) ?? current,
+    );
+    setSelectedProducts((current) =>
+      current[product.product_id]
+        ? { ...current, [product.product_id]: product }
+        : current,
+    );
+  }, []);
 
   const initialLoading = products === null || profiles === null || layouts === null;
 
@@ -310,6 +332,7 @@ export function CatalogBuilderPage() {
                     product={product}
                     selected={selectedSet.has(product.product_id)}
                     onToggle={handleToggle}
+                    onReviewCopy={setEditorialProductId}
                   />
                 ))}
               </div>
@@ -335,6 +358,13 @@ export function CatalogBuilderPage() {
           <p className="future-note">Catalog creation and publishing arrive in a later block.</p>
         </aside>
       </div>
+      {editorialProductId && (
+        <ProductEditorialDrawer
+          productId={editorialProductId}
+          onClose={() => setEditorialProductId(null)}
+          onProductUpdated={handleProductUpdated}
+        />
+      )}
     </main>
   );
 }

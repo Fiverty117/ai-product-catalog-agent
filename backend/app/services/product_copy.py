@@ -113,7 +113,11 @@ def build_product_copy_source_fingerprint(
     ).hexdigest()
 
 
-def build_product_copy_idempotency_key(payload: ProductCopyJobPayload) -> str:
+def build_product_copy_idempotency_key(
+    payload: ProductCopyJobPayload,
+    *,
+    generation_request_key: str | None = None,
+) -> str:
     expected_fingerprint = build_product_copy_source_fingerprint(
         payload.input_snapshot
     )
@@ -130,6 +134,15 @@ def build_product_copy_idempotency_key(payload: ProductCopyJobPayload) -> str:
         "schema_version": payload.schema_version,
         "parameters": payload.parameters,
     }
+    if generation_request_key is not None:
+        normalized_request_key = generation_request_key.strip()
+        if not normalized_request_key or len(normalized_request_key) > 200:
+            raise ValueError(
+                "generation_request_key must contain 1 to 200 characters"
+            )
+        identity["generation_request_key_sha256"] = hashlib.sha256(
+            normalized_request_key.encode("utf-8")
+        ).hexdigest()
     digest = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
     return f"{PRODUCT_COPY_JOB_TYPE}:{digest}"
 
@@ -144,6 +157,7 @@ def enqueue_product_copy(
     schema_version: str = PRODUCT_COPY_SCHEMA_VERSION,
     parameters: Mapping[str, object] | None = None,
     max_attempts: int = 3,
+    generation_request_key: str | None = None,
 ) -> Job:
     resolved_parameters = normalize_product_copy_parameters(parameters)
     resolved_model = model or configured_openai_product_copy_model()
@@ -164,7 +178,10 @@ def enqueue_product_copy(
         session,
         job_type=PRODUCT_COPY_JOB_TYPE,
         payload=payload.model_dump(mode="json", exclude_none=True),
-        idempotency_key=build_product_copy_idempotency_key(payload),
+        idempotency_key=build_product_copy_idempotency_key(
+            payload,
+            generation_request_key=generation_request_key,
+        ),
         max_attempts=max_attempts,
     )
 

@@ -359,24 +359,21 @@ class EffectiveProductCopy(StrictSchema):
     short_description: ProductShortDescription | None
     product_copy_run_id: uuid.UUID | None
     product_copy_review_id: uuid.UUID | None
+    product_copy_manual_revision_id: uuid.UUID | None = None
     source_fingerprint: Sha256 | None
 
     @model_validator(mode="after")
     def validate_resolution(self):
         values = (
             self.short_description,
-            self.product_copy_run_id,
-            self.product_copy_review_id,
             self.source_fingerprint,
         )
-        if self.state is ProductCopyResolutionState.NONE and any(
-            value is not None for value in values
-        ):
+        if self.state is ProductCopyResolutionState.NONE and (any(value is not None for value in values) or self.product_copy_run_id is not None or self.product_copy_review_id is not None or self.product_copy_manual_revision_id is not None):
             raise ValueError("no-copy resolution cannot contain copy lineage")
-        if self.state is not ProductCopyResolutionState.NONE and any(
-            value is None for value in values
-        ):
+        if self.state is not ProductCopyResolutionState.NONE and any(value is None for value in values):
             raise ValueError("resolved copy requires complete lineage")
+        if self.state is not ProductCopyResolutionState.NONE and ((self.product_copy_run_id is not None and self.product_copy_review_id is not None) == (self.product_copy_manual_revision_id is not None)):
+            raise ValueError("resolved copy requires exactly one lineage source")
         return self
 
 
@@ -1158,6 +1155,93 @@ class CatalogBuilderLayoutSummary(StrictSchema):
     products_per_row: int
     page_size: Literal["A4"]
     orientation: Literal["portrait"]
+
+
+class ProductCopyEditorialEffectiveSummary(StrictSchema):
+    state: ProductCopyResolutionState
+    short_description: ProductShortDescription | None
+
+
+class ProductCopyEditorialReviewSummary(StrictSchema):
+    decision: ProductCopyReviewDecision
+    corrected_short_description: ProductShortDescription | None
+    created_at: datetime
+
+
+class ProductCopyEditorialRunSummary(StrictSchema):
+    run_id: uuid.UUID
+    job_id: uuid.UUID | None
+    status: ExtractionRunStatus
+    review_state: Literal["unreviewed", "approved", "corrected", "rejected"]
+    generated_text: ProductShortDescription | None
+    sanitized_error: str | None
+    source_state: Literal["current", "stale"]
+    review: ProductCopyEditorialReviewSummary | None
+    provider: str
+    model: str
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class ProductCopyGenerationSummary(StrictSchema):
+    job_id: uuid.UUID
+    status: JobStatus
+    attempts: int
+    max_attempts: int
+    can_retry: bool
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None
+
+
+class ProductCopyEditorialSummary(StrictSchema):
+    product: CatalogBuilderProductSummary
+    effective_copy: ProductCopyEditorialEffectiveSummary
+    generations: list[ProductCopyGenerationSummary]
+    runs: list[ProductCopyEditorialRunSummary]
+    manual_revisions: list["ProductCopyManualRevisionSummary"]
+    has_active_generation: bool
+
+
+class ProductCopyManualRevisionRequest(StrictSchema):
+    short_description: ProductShortDescription
+
+
+class ProductCopyManualRevisionSummary(StrictSchema):
+    revision_id: uuid.UUID
+    short_description: ProductShortDescription
+    source_state: Literal["current", "stale"]
+    created_at: datetime
+
+
+class ProductCopyManualRevisionResponse(StrictSchema):
+    revision: ProductCopyManualRevisionSummary
+    editorial: ProductCopyEditorialSummary
+
+
+class ProductCopyGenerationResponse(StrictSchema):
+    generation: ProductCopyGenerationSummary
+    editorial: ProductCopyEditorialSummary
+
+
+class ProductCopyEditorialReviewRequest(StrictSchema):
+    decision: ProductCopyReviewDecision
+    corrected_short_description: ProductShortDescription | None = None
+
+    @model_validator(mode="after")
+    def validate_decision_contract(self):
+        if self.decision is ProductCopyReviewDecision.CORRECTED:
+            if self.corrected_short_description is None:
+                raise ValueError("corrected review requires short_description")
+        elif self.corrected_short_description is not None:
+            raise ValueError("only corrected review may include corrected text")
+        return self
+
+
+class ProductCopyReviewResponse(StrictSchema):
+    review: ProductCopyEditorialReviewSummary
+    editorial: ProductCopyEditorialSummary
 
 
 class JobCreate(BaseModel):

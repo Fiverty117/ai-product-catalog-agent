@@ -39,6 +39,7 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "products",
         "product_categories",
         "product_copy_reviews",
+        "product_copy_manual_revisions",
         "product_copy_runs",
         "skus",
         "sku_field_provenance",
@@ -117,7 +118,7 @@ def test_0018_preserves_0017_catalog_history_and_adds_copy_constraints(
     command.upgrade(config, "head")
     engine = create_engine(f"sqlite:///{database_path}")
     inspector = inspect(engine)
-    assert {"product_copy_runs", "product_copy_reviews"} <= set(
+    assert {"product_copy_runs", "product_copy_reviews", "product_copy_manual_revisions"} <= set(
         inspector.get_table_names()
     )
     assert {
@@ -157,6 +158,7 @@ def test_0018_preserves_0017_catalog_history_and_adds_copy_constraints(
         assert connection.scalar(text("SELECT count(*) FROM catalog_artifacts")) == 1
         assert connection.scalar(text("SELECT count(*) FROM product_copy_runs")) == 0
         assert connection.scalar(text("SELECT count(*) FROM product_copy_reviews")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM product_copy_manual_revisions")) == 0
         assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
     engine.dispose()
     command.check(config)
