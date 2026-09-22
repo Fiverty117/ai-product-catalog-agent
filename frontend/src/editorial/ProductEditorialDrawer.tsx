@@ -5,7 +5,11 @@ import {
   ProductCopyEditorialSummary,
   ProductSummary,
   ProductDataSummary,
+  ProductImageEditorialSummary,
   fetchProductData,
+  fetchProductImageEditorial,
+  reviewProductDerivedImage,
+  selectProductImagePresentation,
   saveProductIdentity,
   saveProductCategories,
   saveProductSKU,
@@ -21,6 +25,7 @@ import {
 import { CurrentProductCopy } from "./CurrentProductCopy";
 import { ProductCopyProposal } from "./ProductCopyProposal";
 import { ProductDataEditor } from "./ProductDataEditor";
+import { ProductImageEditor, ProductImageAction } from "./ProductImageEditor";
 
 function formatPrice(amount: string, currency: string): string {
   if (currency !== "PYG") return `${currency} ${amount}`;
@@ -30,12 +35,16 @@ function formatPrice(amount: string, currency: string): string {
 
 function EditorialImage({ product }: { product: ProductSummary }) {
   const [failed, setFailed] = useState(false);
-  if (!product.hero || failed) {
+  const hero = product.hero;
+  const presentationKey = hero ? `${hero.source_photo_id}:${hero.effective_derived_image_id ?? "original"}` : "none";
+  useEffect(() => setFailed(false), [presentationKey]);
+  if (!hero || failed) {
     return <div className="editorial-image-placeholder">No image</div>;
   }
   return (
     <img
-      src={resolveApiUrl(product.hero.image_url)}
+      key={presentationKey}
+      src={resolveApiUrl(hero.image_url)}
       alt={`${product.brand_name} ${product.product_name}`}
       onError={() => setFailed(true)}
     />
@@ -53,6 +62,8 @@ export function ProductEditorialDrawer({
 }) {
   const [summary, setSummary] = useState<ProductCopyEditorialSummary | null>(null);
   const [productData, setProductData] = useState<ProductDataSummary | null>(null);
+  const [imageSummary, setImageSummary] = useState<ProductImageEditorialSummary | null>(null);
+  const [imageBusyAction, setImageBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -74,6 +85,7 @@ export function ProductEditorialDrawer({
     const controller = new AbortController();
     setSummary(null);
     setProductData(null);
+    setImageSummary(null);
     setError(null);
     fetchProductCopyEditorial(productId, controller.signal)
       .then(applySummary)
@@ -85,6 +97,9 @@ export function ProductEditorialDrawer({
     fetchProductData(productId, controller.signal)
       .then(setProductData)
       .catch((caught: unknown) => { if ((caught as Error).name !== "AbortError") setError("Product data could not be loaded."); });
+    fetchProductImageEditorial(productId, controller.signal)
+      .then(setImageSummary)
+      .catch((caught: unknown) => { if ((caught as Error).name !== "AbortError") setError("Product image workspace could not be loaded."); });
     return () => controller.abort();
   }, [applySummary, productId]);
 
@@ -188,6 +203,26 @@ export function ProductEditorialDrawer({
     }
   };
 
+  const handleImageAction = async (action: ProductImageAction) => {
+    if (!imageSummary?.source_photo_id) return;
+    const actionKey = action.kind === "review" ? `review-${action.derivedImageId}-${action.decision}` : action.derivedImageId ? `select-${action.derivedImageId}` : "select-original";
+    setImageBusyAction(actionKey);
+    setError(null);
+    try {
+      const next = action.kind === "review"
+        ? await reviewProductDerivedImage(productId, action.derivedImageId, action.decision)
+        : await selectProductImagePresentation(productId, imageSummary.source_photo_id, action.derivedImageId);
+      setImageSummary(next);
+      setSummary((current) => current ? { ...current, product: next.product } : current);
+      setProductData((current) => current ? { ...current, product: next.product } : current);
+      onProductUpdated(next.product);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "The Product image action could not be saved.");
+    } finally {
+      setImageBusyAction(null);
+    }
+  };
+
   return (
     <div className="drawer-backdrop">
       <aside
@@ -234,6 +269,8 @@ export function ProductEditorialDrawer({
                 </div>
               </div>
             </section>
+
+            {imageSummary && <ProductImageEditor summary={imageSummary} busyAction={imageBusyAction} onAction={handleImageAction} />}
 
             {productData && <ProductDataEditor data={productData} saving={busyAction === "product-data"} onSave={handleDataSave} />}
 

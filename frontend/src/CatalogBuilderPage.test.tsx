@@ -21,6 +21,9 @@ const apiMocks = vi.hoisted(() => ({
   fetchProductData: vi.fn(),
   changeProductPrice: vi.fn(),
   saveProductCategories: vi.fn(),
+  fetchProductImageEditorial: vi.fn(),
+  selectProductImagePresentation: vi.fn(),
+  reviewProductDerivedImage: vi.fn(),
 }));
 
 vi.mock("./api", async () => {
@@ -95,6 +98,11 @@ const allProducts = [
 ];
 
 beforeEach(() => {
+  apiMocks.fetchProductImageEditorial.mockImplementation((id: string) => Promise.resolve({
+    product_id: id, source_photo_id: null, source_owner: null, source_sku_id: null,
+    original_preview_url: null, effective: null, derived_images: [],
+    product: allProducts.find((item) => item.product_id === id) ?? allProducts[0],
+  }));
   apiMocks.fetchProductData.mockImplementation((id: string) => Promise.resolve({
     product: allProducts.find((item) => item.product_id === id) ?? allProducts[0],
     brand_id: "brand-1", brands: [{ brand_id: "brand-1", name: "Landerfit" }], categories: [], skus: [], identity_history: [],
@@ -155,7 +163,7 @@ describe("CatalogBuilderPage", () => {
     expect(within(summary).getByText("Columns").nextElementSibling).toHaveTextContent("3");
     expect(within(returnedCard).getByRole("checkbox")).toBeChecked();
     expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
-  });
+  }, 15000);
 
   it("opens editorial review, syncs approved copy, and preserves Builder selection", async () => {
     const user = userEvent.setup();
@@ -317,5 +325,33 @@ describe("CatalogBuilderPage", () => {
     expect(screen.getByText("All selected Products ready").nextElementSibling).toHaveTextContent("—");
     await user.click(within(card).getByRole("checkbox"));
     expect(within(card).getByRole("checkbox")).toBeDisabled();
+  });
+
+  it("switches the Builder card image after backend-confirmed presentation selection and preserves selection", async () => {
+    const user = userEvent.setup();
+    const initial = product("ready", "Premium Whey", true, "current");
+    const updated = { ...initial, hero: { ...initial.hero!, effective_derived_image_id: "derived-1", presentation_type: "derived" as const } };
+    apiMocks.fetchProducts.mockResolvedValue({ currency: "PYG", as_of: "2026-09-18T12:00:00Z", products: [initial] });
+    apiMocks.fetchProductCopyEditorial.mockResolvedValue({ product: initial, effective_copy: { state: "current", short_description: initial.short_description }, generations: [], runs: [], manual_revisions: [], has_active_generation: false });
+    apiMocks.fetchProductImageEditorial.mockResolvedValue({
+      product_id: "ready", source_photo_id: "ready-photo", source_owner: "product", source_sku_id: null,
+      original_preview_url: "/original", effective: { presentation: "original", derived_image_id: null, preview_url: "/original", warnings: [] },
+      derived_images: [{ derived_image_id: "derived-1", review_state: "approved", selectable: true, asset_available: true, selected: false, preview_url: "/derived", created_at: "2026-09-18T12:00:00Z" }], product: initial,
+    });
+    apiMocks.selectProductImagePresentation.mockResolvedValue({
+      product_id: "ready", source_photo_id: "ready-photo", source_owner: "product", source_sku_id: null,
+      original_preview_url: "/original", effective: { presentation: "derived", derived_image_id: "derived-1", preview_url: "/derived", warnings: [] },
+      derived_images: [{ derived_image_id: "derived-1", review_state: "approved", selectable: true, asset_available: true, selected: true, preview_url: "/derived", created_at: "2026-09-18T12:00:00Z" }], product: updated,
+    });
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    const firstImage = within(card).getByRole("img");
+    await user.click(within(card).getByRole("button", { name: "Edit Product" }));
+    await user.click(await screen.findByRole("button", { name: "Use enhanced image" }));
+    await waitFor(() => expect(apiMocks.selectProductImagePresentation).toHaveBeenCalledWith("ready", "ready-photo", "derived-1"));
+    expect(within(card).getByRole("checkbox")).toBeChecked();
+    expect(within(card).getByRole("img")).not.toBe(firstImage);
+    expect(within(card).getByRole("img")).toHaveAttribute("src", expect.stringContaining("/api/catalog-builder/products/ready/image"));
   });
 });

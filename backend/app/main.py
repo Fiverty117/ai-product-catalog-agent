@@ -5,6 +5,7 @@ from app.api.health import router as health_router
 from app.api.photos import router as photos_router
 from app.api.product_copy import router as product_copy_router
 from app.api.product_data import router as product_data_router
+from app.api.product_images import router as product_images_router
 
 app = FastAPI(
     title="AI Product Catalog Agent API",
@@ -16,3 +17,4 @@ app.include_router(photos_router)
 app.include_router(catalog_builder_router)
 app.include_router(product_copy_router)
 app.include_router(product_data_router)
+app.include_router(product_images_router)

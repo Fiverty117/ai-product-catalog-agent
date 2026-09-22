@@ -1331,6 +1331,49 @@ class ProductDataSummary(StrictSchema):
     identity_history: list[dict[str, str]]
 
 
+class ProductImagePresentationRequest(StrictSchema):
+    presentation: Literal["original", "derived"]
+    derived_image_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        if (self.presentation == "derived") != (self.derived_image_id is not None):
+            raise ValueError("derived presentation requires derived_image_id; original does not")
+        return self
+
+
+class ProductDerivedImageReviewRequest(StrictSchema):
+    decision: DerivedImageReviewDecision
+
+
+class ProductImageEffectiveSummary(StrictSchema):
+    presentation: PhotoPresentationAssetType
+    derived_image_id: uuid.UUID | None
+    preview_url: str
+    warnings: list[PhotoPresentationWarning]
+
+
+class ProductImageDerivedSummary(StrictSchema):
+    derived_image_id: uuid.UUID
+    review_state: DerivedImageReviewState
+    selectable: bool
+    asset_available: bool
+    selected: bool
+    preview_url: str | None
+    created_at: datetime
+
+
+class ProductImageEditorialSummary(StrictSchema):
+    product_id: uuid.UUID
+    source_photo_id: uuid.UUID | None
+    source_owner: Literal["product", "sku"] | None
+    source_sku_id: uuid.UUID | None
+    original_preview_url: str | None
+    effective: ProductImageEffectiveSummary | None
+    derived_images: list[ProductImageDerivedSummary]
+    product: CatalogBuilderProductSummary
+
+
 class JobCreate(BaseModel):
     job_type: NonEmptyText
     payload: dict[str, Any]

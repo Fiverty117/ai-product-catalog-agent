@@ -20,6 +20,9 @@ const apiMocks = vi.hoisted(() => ({
   saveProductSKU: vi.fn(),
   addProductSKU: vi.fn(),
   changeProductPrice: vi.fn(),
+  fetchProductImageEditorial: vi.fn(),
+  reviewProductDerivedImage: vi.fn(),
+  selectProductImagePresentation: vi.fn(),
 }));
 
 vi.mock("../api", async () => {
@@ -107,6 +110,13 @@ function renderDrawer(onClose = vi.fn(), onProductUpdated = vi.fn()) {
 }
 
 beforeEach(() => {
+  apiMocks.selectProductImagePresentation.mockReset();
+  apiMocks.reviewProductDerivedImage.mockReset();
+  apiMocks.fetchProductImageEditorial.mockResolvedValue({
+    product_id: "product-1", source_photo_id: null, source_owner: null,
+    source_sku_id: null, original_preview_url: null, effective: null,
+    derived_images: [], product,
+  });
   apiMocks.fetchProductData.mockResolvedValue({
     product, brand_id: "brand-1", brands: [{ brand_id: "brand-1", name: "Landerfit" }],
     categories: [{ category_id: "category-1", name: "Proteínas", assigned: true, is_primary: true }],
@@ -146,6 +156,23 @@ beforeEach(() => {
 });
 
 describe("ProductEditorialDrawer", () => {
+  it("keeps image state visible and shows an error when selection fails", async () => {
+    const imageSummary = {
+      product_id: "product-1", source_photo_id: "photo-1", source_owner: "product" as const, source_sku_id: null,
+      original_preview_url: "/original", effective: { presentation: "original" as const, derived_image_id: null, preview_url: "/original", warnings: [] },
+      derived_images: [{ derived_image_id: "approved", review_state: "approved" as const, selectable: true, asset_available: true, selected: false, preview_url: "/approved", created_at: "2026-09-18T12:00:00Z" }], product,
+    };
+    apiMocks.fetchProductImageEditorial.mockResolvedValue(imageSummary);
+    let rejectSelection!: (reason: Error) => void;
+    apiMocks.selectProductImagePresentation.mockReturnValue(new Promise((_resolve, reject) => { rejectSelection = reject; }));
+    const user = userEvent.setup();
+    renderDrawer();
+    await user.click(await screen.findByRole("button", { name: "Use enhanced image" }));
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
+    rejectSelection(new Error("conflict"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The Product image action could not be saved.");
+    expect(screen.getByText("Using: Original image")).toBeVisible();
+  }, 15000);
   it("keeps the Product draft on backend conflict and prevents a duplicate save", async () => {
     let rejectSave!: (reason: Error) => void;
     apiMocks.saveProductIdentity.mockReturnValue(new Promise((_resolve, reject) => { rejectSave = reject; }));

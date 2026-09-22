@@ -269,7 +269,7 @@ def test_builder_product_read_model_preserves_authoritative_state(builder_store)
         ]
         assert ready_summary.hero.source_photo_id == photo.id
         assert ready_summary.hero.presentation_type.value == "original"
-        assert ready_summary.hero.image_url.endswith(f"/{ready.id}/image")
+        assert ready_summary.hero.image_url.startswith(f"/api/catalog-builder/products/{ready.id}/image?")
         assert ready_summary.copy_state.value == "current"
         assert ready_summary.short_description.startswith("Proteína premium")
 

@@ -146,6 +146,45 @@ export type ProductDataPrice = {
   source: string; approved: boolean;
 };
 
+export type ProductImageEditorialSummary = {
+  product_id: string;
+  source_photo_id: string | null;
+  source_owner: "product" | "sku" | null;
+  source_sku_id: string | null;
+  original_preview_url: string | null;
+  effective: {
+    presentation: "original" | "derived";
+    derived_image_id: string | null;
+    preview_url: string;
+    warnings: Array<"preferred_derived_asset_missing" | "preferred_derived_selection_invalid">;
+  } | null;
+  derived_images: {
+    derived_image_id: string;
+    review_state: "unreviewed" | "approved" | "rejected";
+    selectable: boolean;
+    asset_available: boolean;
+    selected: boolean;
+    preview_url: string | null;
+    created_at: string;
+  }[];
+  product: ProductSummary;
+};
+
+export function fetchProductImageEditorial(productId: string, signal?: AbortSignal): Promise<ProductImageEditorialSummary> {
+  return getJson(`/api/products/${productId}/images/editorial`, signal);
+}
+
+export function reviewProductDerivedImage(productId: string, derivedImageId: string, decision: "approved" | "rejected"): Promise<ProductImageEditorialSummary> {
+  return requestJson(`/api/products/${productId}/images/derived/${derivedImageId}/review`, { method: "POST", body: JSON.stringify({ decision }) });
+}
+
+export function selectProductImagePresentation(productId: string, photoId: string, derivedImageId: string | null): Promise<ProductImageEditorialSummary> {
+  return requestJson(`/api/products/${productId}/images/photos/${photoId}/presentation`, {
+    method: "PUT",
+    body: JSON.stringify(derivedImageId ? { presentation: "derived", derived_image_id: derivedImageId } : { presentation: "original" }),
+  });
+}
+
 export type SKUDataInput = {
   external_sku: string | null; flavor: string | null; size_value: string | null;
   size_unit: string | null; servings: number | null;

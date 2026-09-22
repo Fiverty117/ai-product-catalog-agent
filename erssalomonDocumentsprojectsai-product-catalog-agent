@@ -1,0 +1,23 @@
+warning: in the working copy of 'backend/app/domain/schemas.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/main.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/catalog_builder.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/catalog_readiness.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_catalog_builder.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/CatalogBuilderPage.test.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/CatalogBuilderPage.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/api.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/editorial/ProductEditorialDrawer.test.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/editorial/ProductEditorialDrawer.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/src/styles.css', LF will be replaced by CRLF the next time Git touches it
+ backend/app/domain/schemas.py                      | 43 [32m++++++++++++++++++++++[m
+ backend/app/main.py                                |  2 [32m+[m
+ backend/app/services/catalog_builder.py            |  5 [32m++[m[31m-[m
+ backend/app/services/catalog_readiness.py          |  4 [32m+[m[31m-[m
+ backend/tests/test_catalog_builder.py              |  2 [32m+[m[31m-[m
+ frontend/src/CatalogBuilderPage.test.tsx           | 38 [32m++++++++++++++++++[m[31m-[m
+ frontend/src/CatalogBuilderPage.tsx                | 11 [32m++++[m[31m--[m
+ frontend/src/api.ts                                | 39 [32m++++++++++++++++++++[m
+ .../src/editorial/ProductEditorialDrawer.test.tsx  | 27 [32m++++++++++++++[m
+ frontend/src/editorial/ProductEditorialDrawer.tsx  | 41 [32m++++++++++++++++++++[m[31m-[m
+ frontend/src/styles.css                            | 29 [32m+++++++++++++++[m
+ 11 files changed, 230 insertions(+), 11 deletions(-)

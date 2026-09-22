@@ -23,11 +23,13 @@ function formatPrice(amount: string, currency: string): string {
 
 function ProductImage({ product }: { product: ProductSummary }) {
   const [failed, setFailed] = useState(false);
-  const imageUrl = product.hero?.image_url;
+  const hero = product.hero;
+  const imageUrl = hero?.image_url;
+  const presentationKey = hero ? `${hero.source_photo_id}:${hero.effective_derived_image_id ?? "original"}` : "none";
 
-  useEffect(() => setFailed(false), [imageUrl]);
+  useEffect(() => setFailed(false), [imageUrl, presentationKey]);
 
-  if (!imageUrl || failed) {
+  if (!hero || failed) {
     return (
       <div className="product-image-placeholder" aria-label="No product image available">
         No image
@@ -36,8 +38,9 @@ function ProductImage({ product }: { product: ProductSummary }) {
   }
   return (
     <img
+      key={presentationKey}
       className="product-image"
-      src={resolveApiUrl(imageUrl)}
+      src={resolveApiUrl(hero.image_url)}
       alt={`${product.brand_name} ${product.product_name}`}
       onError={() => setFailed(true)}
     />

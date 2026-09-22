@@ -227,7 +227,10 @@ def _build_product_summary(
             source_photo_id=readiness.hero_photo_id,
             effective_derived_image_id=readiness.hero_derived_image_id,
             presentation_type=readiness.hero_presentation_type,
-            image_url=f"/api/catalog-builder/products/{product.id}/image",
+            image_url=(
+                f"/api/catalog-builder/products/{product.id}/image"
+                f"?presentation={readiness.hero_derived_image_id or 'original'}"
+            ),
         )
 
     effective_copy = resolve_effective_product_copy(session, product.id)

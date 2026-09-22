@@ -81,7 +81,7 @@ def evaluate_product_catalog_readiness(
         )
 
     hero_photo, hero_source, hero_source_sku_id, has_front_records = (
-        _resolve_catalog_hero(session, product.id)
+        resolve_catalog_hero_source(session, product.id)
     )
     if hero_photo is None:
         blockers.append(
@@ -260,7 +260,7 @@ def _evaluate_categories(
     return primary_category_id
 
 
-def _resolve_catalog_hero(
+def resolve_catalog_hero_source(
     session: Session,
     product_id: uuid.UUID,
 ) -> tuple[Photo | None, CatalogHeroPhotoSource | None, uuid.UUID | None, bool]:
