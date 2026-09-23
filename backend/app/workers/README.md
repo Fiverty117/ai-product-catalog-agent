@@ -9,6 +9,17 @@ after the claim transaction is committed and closed. Raising `PermanentJobError`
 marks the Job failed immediately; other errors use the existing bounded retry
 schedule.
 
+For Catalog Builder PDF generation, install Playwright Chromium once and run
+from `backend`:
+
+```powershell
+python -m playwright install chromium
+python -m app.scripts.run_catalog_render_worker
+```
+
+This worker continuously polls only `catalog.render.v2` Jobs. Use `--once` for
+one eligible claim during a focused smoke test.
+
 For the local Product Copy editorial queue, set `OPENAI_API_KEY` and run from
 `backend`:
 

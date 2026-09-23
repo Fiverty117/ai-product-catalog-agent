@@ -66,6 +66,39 @@ export type CatalogLayout = {
   orientation: "portrait";
 };
 
+export type CatalogBuild = {
+  id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  catalog_snapshot_id: string;
+  product_count: number;
+  currency: string;
+  catalog_brand_profile_id: string;
+  catalog_brand_key: string;
+  catalog_brand_display_name: string;
+  layout_key: CatalogLayout["key"];
+  layout_version: string;
+  layout_display_label: string;
+  created_at: string;
+  error: string | null;
+  can_retry: boolean;
+  artifact: {
+    id: string;
+    created_at: string;
+    page_count: number;
+    preview_url: string;
+    download_url: string;
+  } | null;
+};
+
+export type CatalogBuildReadinessConflict = {
+  code: "catalog_readiness_changed";
+  message: string;
+  products: Array<{
+    product_id: string;
+    blockers: ReadinessIssue[];
+  }>;
+};
+
 export type ProductCopyReviewState = "unreviewed" | "approved" | "corrected" | "rejected";
 
 export type ProductCopyEditorialReview = {
@@ -219,6 +252,7 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly detail: unknown = message,
   ) {
     super(message);
     this.name = "ApiError";
@@ -238,14 +272,20 @@ async function requestJson<T>(
   });
   if (!response.ok) {
     let detail = `Request failed (${response.status})`;
+    let rawDetail: unknown = detail;
     try {
-      const payload = (await response.json()) as { detail?: string | { msg?: string }[] };
+      const payload = (await response.json()) as { detail?: unknown };
+      rawDetail = payload.detail ?? detail;
       if (typeof payload.detail === "string") detail = payload.detail;
       else if (Array.isArray(payload.detail) && typeof payload.detail[0]?.msg === "string") detail = payload.detail[0].msg;
+      else if (
+        payload.detail && typeof payload.detail === "object" &&
+        "message" in payload.detail && typeof payload.detail.message === "string"
+      ) detail = payload.detail.message;
     } catch {
       // Keep the concise status fallback when a response is not JSON.
     }
-    throw new ApiError(response.status, detail);
+    throw new ApiError(response.status, detail, rawDetail);
   }
   return response.json() as Promise<T>;
 }
@@ -270,6 +310,36 @@ export function fetchBrandProfiles(signal?: AbortSignal): Promise<BrandProfile[]
 
 export function fetchLayouts(signal?: AbortSignal): Promise<CatalogLayout[]> {
   return getJson<CatalogLayout[]>("/api/catalog-builder/layouts", signal);
+}
+
+export type CatalogBuildInput = {
+  product_ids: string[];
+  catalog_brand_profile_id: string;
+  layout_key: CatalogLayout["key"];
+  layout_version: string;
+  currency: string;
+  idempotency_key: string;
+};
+
+export function createCatalogBuild(input: CatalogBuildInput): Promise<CatalogBuild> {
+  return requestJson<CatalogBuild>("/api/catalog-builder/builds", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function fetchCatalogBuild(
+  buildId: string,
+  signal?: AbortSignal,
+): Promise<CatalogBuild> {
+  return getJson<CatalogBuild>(`/api/catalog-builder/builds/${buildId}`, signal);
+}
+
+export function retryCatalogBuild(buildId: string): Promise<CatalogBuild> {
+  return requestJson<CatalogBuild>(
+    `/api/catalog-builder/builds/${buildId}/retry`,
+    { method: "POST" },
+  );
 }
 
 export function fetchProductCopyEditorial(

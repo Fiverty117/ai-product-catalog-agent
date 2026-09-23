@@ -1,6 +1,6 @@
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 
@@ -160,10 +160,14 @@ def test_review_history_derives_current_state_without_rewriting_rows(
     ) is DerivedImageReviewState.APPROVED
 
     second = review(session, derived, DerivedImageReviewDecision.REJECTED)
+    second.created_at = first.created_at + timedelta(microseconds=1)
+    session.flush()
     assert get_derived_image_review_state(
         session, derived.id
     ) is DerivedImageReviewState.REJECTED
     third = approve(session, derived)
+    third.created_at = second.created_at + timedelta(microseconds=1)
+    session.flush()
 
     assert get_current_derived_image_review(session, derived.id).id == third.id
     assert get_derived_image_review_state(

@@ -11,12 +11,28 @@ from app.domain.schemas import (
     CatalogBuilderBrandProfileSummary,
     CatalogBuilderLayoutSummary,
     CatalogBuilderProductList,
+    CatalogBuildCreate,
+    CatalogBuildRead,
 )
 from app.services.catalog_branding import (
     DEFAULT_STORAGE_ROOT,
     CatalogBrandingError,
+    InactiveCatalogBrandProfileError,
+    UnknownCatalogBrandProfileError,
     get_active_catalog_brand_profile,
     resolve_catalog_branding,
+)
+from app.services.catalog_builds import (
+    CatalogBuildArtifactIntegrityError,
+    CatalogBuildIdempotencyConflictError,
+    CatalogBuildIntegrityError,
+    CatalogBuildRetryError,
+    UnknownCatalogBuildArtifactError,
+    UnknownCatalogBuildError,
+    create_catalog_build,
+    get_catalog_build,
+    resolve_catalog_build_artifact_pdf,
+    retry_catalog_build,
 )
 from app.services.catalog_builder import (
     CatalogBuilderImageUnavailableError,
@@ -25,6 +41,13 @@ from app.services.catalog_builder import (
     list_catalog_builder_layouts,
     list_catalog_builder_products,
     resolve_catalog_builder_product_image,
+)
+from app.rendering.catalog_layouts import UnknownCatalogLayoutError
+from app.services.catalog_readiness import UnknownCatalogReadinessProductError
+from app.services.catalog_snapshots import (
+    CatalogSnapshotError,
+    CatalogSnapshotIntegrityError,
+    CatalogSnapshotReadinessError,
 )
 
 router = APIRouter(prefix="/api/catalog-builder", tags=["catalog-builder"])
@@ -58,6 +81,133 @@ def list_brand_profiles(
 @router.get("/layouts", response_model=list[CatalogBuilderLayoutSummary])
 def list_layouts() -> list[CatalogBuilderLayoutSummary]:
     return list_catalog_builder_layouts()
+
+
+@router.post("/builds", response_model=CatalogBuildRead)
+def create_build(
+    request: CatalogBuildCreate,
+    session: Annotated[Session, Depends(get_db)],
+) -> CatalogBuildRead:
+    try:
+        build = create_catalog_build(session, request)
+        session.commit()
+        return build
+    except UnknownCatalogReadinessProductError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found.",
+        ) from exc
+    except UnknownCatalogBrandProfileError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Catalog Brand profile not found.",
+        ) from exc
+    except UnknownCatalogLayoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Catalog layout not found.",
+        ) from exc
+    except CatalogSnapshotReadinessError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "catalog_readiness_changed",
+                "message": "One or more selected Products are no longer ready.",
+                "products": [
+                    {
+                        "product_id": str(report.product_id),
+                        "blockers": [
+                            blocker.model_dump(mode="json")
+                            for blocker in report.blockers
+                        ],
+                    }
+                    for report in exc.failures
+                ],
+            },
+        ) from exc
+    except (
+        InactiveCatalogBrandProfileError,
+        CatalogBuildIdempotencyConflictError,
+        CatalogSnapshotError,
+        CatalogBrandingError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/builds/{build_id}", response_model=CatalogBuildRead)
+def read_build(
+    build_id: uuid.UUID,
+    session: Annotated[Session, Depends(get_db)],
+) -> CatalogBuildRead:
+    try:
+        return get_catalog_build(session, build_id)
+    except UnknownCatalogBuildError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Catalog build not found.",
+        ) from exc
+    except (CatalogBuildIntegrityError, CatalogSnapshotIntegrityError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Catalog build state is inconsistent.",
+        ) from exc
+
+
+@router.post("/builds/{build_id}/retry", response_model=CatalogBuildRead)
+def retry_build(
+    build_id: uuid.UUID,
+    session: Annotated[Session, Depends(get_db)],
+) -> CatalogBuildRead:
+    try:
+        build = retry_catalog_build(session, build_id)
+        session.commit()
+        return build
+    except UnknownCatalogBuildError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Catalog build not found.",
+        ) from exc
+    except CatalogBuildRetryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except (CatalogBuildIntegrityError, CatalogSnapshotIntegrityError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Catalog build state is inconsistent.",
+        ) from exc
+
+
+@router.get("/artifacts/{artifact_id}/pdf", response_class=FileResponse)
+def catalog_artifact_pdf(
+    artifact_id: uuid.UUID,
+    session: Annotated[Session, Depends(get_db)],
+    download: bool = False,
+) -> FileResponse:
+    try:
+        path, artifact = resolve_catalog_build_artifact_pdf(
+            session, artifact_id
+        )
+    except UnknownCatalogBuildArtifactError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Catalog PDF not found.",
+        ) from exc
+    except CatalogBuildArtifactIntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Catalog PDF is unavailable or failed integrity validation.",
+        ) from exc
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=f"catalog-{artifact.id}.pdf",
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 @router.get("/products/{product_id}/image", response_class=FileResponse)

@@ -421,12 +421,86 @@ select:disabled {
   font-weight: 720;
 }
 
-.future-note {
-  margin: 9px 0 0;
-  color: #77817c;
-  font-size: 0.75rem;
-  line-height: 1.4;
-  text-align: center;
+.composition-panel button.create-catalog-action:not(:disabled),
+.build-result button:not(:disabled) {
+  color: #fff;
+  background: #296c51;
+  cursor: pointer;
+}
+
+.composition-panel button:disabled {
+  cursor: not-allowed;
+}
+
+.build-error {
+  margin: 12px 0 0;
+  padding: 10px 11px;
+  border-radius: 6px;
+  color: #803f34;
+  background: #fbefeb;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.build-result {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #d5dfd9;
+  border-radius: 8px;
+  background: #f7faf8;
+}
+
+.build-result h3 {
+  margin: 5px 0 7px;
+  color: #1d4937;
+  font-size: 1rem;
+}
+
+.build-result > p:not(.section-kicker) {
+  margin: 7px 0 0;
+  color: #59675f;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.build-result.build-failed {
+  border-color: #e6c9c1;
+  background: #fcf3f0;
+}
+
+.build-result.build-failed h3,
+.build-result .build-failure-message {
+  color: #7d4538;
+}
+
+.build-result button {
+  margin-top: 12px;
+}
+
+.artifact-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.artifact-actions a {
+  display: grid;
+  place-items: center;
+  min-height: 40px;
+  padding: 8px;
+  border: 1px solid #296c51;
+  border-radius: 6px;
+  color: #285a46;
+  background: #fff;
+  font-size: 0.8rem;
+  font-weight: 720;
+  text-decoration: none;
+}
+
+.artifact-actions a:last-child {
+  color: #fff;
+  background: #296c51;
 }
 
 .notice,

@@ -759,7 +759,7 @@ def test_reviewed_copy_change_changes_new_snapshot_hash(session: Session) -> Non
     first_review = review_copy(
         session, first_run, ProductCopyReviewDecision.APPROVED
     )
-    first_review.created_at = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
+    first_review.applied_at = datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc)
     session.flush()
     first_snapshot = create_snapshot(session, [product.id])
 
@@ -770,7 +770,7 @@ def test_reviewed_copy_change_changes_new_snapshot_hash(session: Session) -> Non
         ProductCopyReviewDecision.CORRECTED,
         "Segunda descripcion humana.",
     )
-    second_review.created_at = datetime(2026, 9, 20, 11, 0, tzinfo=timezone.utc)
+    second_review.applied_at = datetime(2026, 9, 20, 11, 0, tzinfo=timezone.utc)
     session.flush()
     second_snapshot = create_snapshot(session, [product.id])
 

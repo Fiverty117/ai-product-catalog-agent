@@ -1,9 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   BrandProfile,
+  CatalogBuild,
   CatalogLayout,
   ProductCopyEditorialSummary,
   ProductSummary,
@@ -24,6 +25,9 @@ const apiMocks = vi.hoisted(() => ({
   fetchProductImageEditorial: vi.fn(),
   selectProductImagePresentation: vi.fn(),
   reviewProductDerivedImage: vi.fn(),
+  createCatalogBuild: vi.fn(),
+  fetchCatalogBuild: vi.fn(),
+  retryCatalogBuild: vi.fn(),
 }));
 
 vi.mock("./api", async () => {
@@ -43,6 +47,30 @@ const profiles: BrandProfile[] = [
   { id: "brand-1", key: "grabelan", display_name: "Grabelan Natural Market", logo_url: null, primary_color: "#183D2F", accent_color: "#C89B3C" },
   { id: "brand-2", key: "secondary", display_name: "Secondary Brand", logo_url: null, primary_color: "#223344", accent_color: "#556677" },
 ];
+
+function catalogBuild(
+  status: CatalogBuild["status"],
+  overrides: Partial<CatalogBuild> = {},
+): CatalogBuild {
+  return {
+    id: "build-1",
+    status,
+    catalog_snapshot_id: "snapshot-1",
+    product_count: 1,
+    currency: "PYG",
+    catalog_brand_profile_id: "brand-1",
+    catalog_brand_key: "grabelan",
+    catalog_brand_display_name: "Grabelan Natural Market",
+    layout_key: "classic",
+    layout_version: "1",
+    layout_display_label: "Classic",
+    created_at: "2026-09-22T12:00:00Z",
+    error: null,
+    can_retry: false,
+    artifact: null,
+    ...overrides,
+  };
+}
 
 function product(
   id: string,
@@ -98,6 +126,7 @@ const allProducts = [
 ];
 
 beforeEach(() => {
+  window.history.replaceState({}, "", "/catalog-builder");
   apiMocks.fetchProductImageEditorial.mockImplementation((id: string) => Promise.resolve({
     product_id: id, source_photo_id: null, source_owner: null, source_sku_id: null,
     original_preview_url: null, effective: null, derived_images: [],
@@ -118,6 +147,9 @@ beforeEach(() => {
   apiMocks.generateProductCopy.mockReset();
   apiMocks.retryProductCopyGeneration.mockReset();
   apiMocks.reviewProductCopy.mockReset();
+  apiMocks.createCatalogBuild.mockReset();
+  apiMocks.fetchCatalogBuild.mockReset();
+  apiMocks.retryCatalogBuild.mockReset();
 });
 
 describe("CatalogBuilderPage", () => {
@@ -162,8 +194,194 @@ describe("CatalogBuilderPage", () => {
     expect(within(summary).getByText("Layout").nextElementSibling).toHaveTextContent("Dense");
     expect(within(summary).getByText("Columns").nextElementSibling).toHaveTextContent("3");
     expect(within(returnedCard).getByRole("checkbox")).toBeChecked();
-    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeEnabled();
   }, 15000);
+
+  it("creates once with stable choices, shows creating/queued state, and preserves Builder controls", async () => {
+    const user = userEvent.setup();
+    let resolveBuild!: (value: CatalogBuild) => void;
+    apiMocks.createCatalogBuild.mockReturnValue(new Promise<CatalogBuild>((resolve) => { resolveBuild = resolve; }));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    const create = screen.getByRole("button", { name: "Create catalog" });
+    expect(create).toBeDisabled();
+    await user.click(within(card).getByRole("checkbox"));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Catalog brand" }), "brand-2");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Layout" }), "dense");
+    expect(create).toBeEnabled();
+
+    await user.dblClick(create);
+    expect(apiMocks.createCatalogBuild).toHaveBeenCalledTimes(1);
+    expect(apiMocks.createCatalogBuild).toHaveBeenCalledWith(expect.objectContaining({
+      product_ids: ["ready"],
+      catalog_brand_profile_id: "brand-2",
+      layout_key: "dense",
+      layout_version: "1",
+      currency: "PYG",
+      idempotency_key: expect.any(String),
+    }));
+    expect(screen.getByRole("button", { name: "Creating snapshot…" })).toBeDisabled();
+    await act(async () => resolveBuild(catalogBuild("queued", {
+      catalog_brand_profile_id: "brand-2",
+      catalog_brand_key: "secondary",
+      catalog_brand_display_name: "Secondary Brand",
+      layout_key: "dense",
+      layout_display_label: "Dense",
+    })));
+    expect(await screen.findByRole("heading", { name: "Catalog queued" })).toBeVisible();
+    expect(within(card).getByRole("checkbox")).toBeChecked();
+    expect(screen.getByRole("combobox", { name: "Catalog brand" })).toHaveValue("brand-2");
+    expect(screen.getByRole("combobox", { name: "Layout" })).toHaveValue("dense");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Catalog brand" }), "brand-1");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Layout" }), "classic");
+    expect(screen.getByText(/1 Product · Secondary Brand · Dense/)).toBeVisible();
+  });
+
+  it("restores an identified build after refresh", async () => {
+    const buildId = "b3226544-d364-4214-81df-1f9936dfe635";
+    window.history.replaceState({}, "", `/catalog-builder?build=${buildId}`);
+    apiMocks.fetchCatalogBuild.mockResolvedValue(catalogBuild("succeeded", {
+      id: buildId,
+      artifact: {
+        id: "artifact-1",
+        created_at: "2026-09-22T12:00:03Z",
+        page_count: 1,
+        preview_url: "/api/catalog-builder/artifacts/artifact-1/pdf",
+        download_url: "/api/catalog-builder/artifacts/artifact-1/pdf?download=true",
+      },
+    }));
+    render(<CatalogBuilderPage />);
+    expect(await screen.findByRole("heading", { name: "Catalog ready" })).toBeVisible();
+    expect(apiMocks.fetchCatalogBuild).toHaveBeenCalledWith(buildId, expect.any(AbortSignal));
+  });
+
+  it("reuses a pending key for the same choices after a lost response", async () => {
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild
+      .mockRejectedValueOnce(new Error("Network unavailable"))
+      .mockResolvedValueOnce(catalogBuild("queued"));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Network unavailable");
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(await screen.findByRole("heading", { name: "Catalog queued" })).toBeVisible();
+    expect(apiMocks.createCatalogBuild).toHaveBeenCalledTimes(2);
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0].idempotency_key)
+      .toBe(apiMocks.createCatalogBuild.mock.calls[1][0].idempotency_key);
+  });
+
+  it("does not create a second build from a fast double click", async () => {
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("succeeded"));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.dblClick(screen.getByRole("button", { name: "Create catalog" }));
+    expect(await screen.findByRole("heading", { name: "Catalog ready" })).toBeVisible();
+    expect(apiMocks.createCatalogBuild).toHaveBeenCalledTimes(1);
+  });
+
+  it("polls only active builds and shows exact preview/download artifact actions", async () => {
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("queued"));
+    apiMocks.fetchCatalogBuild
+      .mockResolvedValueOnce(catalogBuild("running"))
+      .mockResolvedValueOnce(catalogBuild("succeeded", {
+        artifact: {
+          id: "artifact-1",
+          created_at: "2026-09-22T12:00:03Z",
+          page_count: 3,
+          preview_url: "/api/catalog-builder/artifacts/artifact-1/pdf",
+          download_url: "/api/catalog-builder/artifacts/artifact-1/pdf?download=true",
+        },
+      }));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(screen.getByRole("heading", { name: "Catalog queued" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Generating catalog…" }, { timeout: 3000 })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Catalog ready" }, { timeout: 3000 })).toBeVisible();
+    expect(screen.getByText(/3 pages/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Preview PDF" })).toHaveAttribute(
+      "href", expect.stringContaining("/api/catalog-builder/artifacts/artifact-1/pdf"),
+    );
+    expect(screen.getByRole("link", { name: "Download PDF" })).toHaveAttribute(
+      "href", expect.stringContaining("download=true"),
+    );
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2200)); });
+    expect(apiMocks.fetchCatalogBuild).toHaveBeenCalledTimes(2);
+  }, 12000);
+
+  it("pauses polling after the bounded wait for a stalled build", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("queued"));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(await screen.findByRole("heading", { name: "Catalog queued" })).toBeVisible();
+    now.mockReturnValue(10 * 60 * 1000 + 1);
+    expect(await screen.findByText(/Status updates paused/,{},{timeout: 3500})).toBeVisible();
+    expect(apiMocks.fetchCatalogBuild).not.toHaveBeenCalled();
+    now.mockRestore();
+  }, 6000);
+
+  it("shows a sanitized failure and retries the same build identity", async () => {
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("failed", {
+      error: "Chromium could not create the PDF.",
+      can_retry: true,
+    }));
+    apiMocks.retryCatalogBuild.mockResolvedValue(catalogBuild("queued"));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(await screen.findByText("Chromium could not create the PDF.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Retry render" }));
+    expect(apiMocks.retryCatalogBuild).toHaveBeenCalledWith("build-1");
+    expect(await screen.findByRole("heading", { name: "Catalog queued" })).toBeVisible();
+  });
+
+  it("refreshes authoritative Products after a readiness conflict without clearing composition", async () => {
+    const user = userEvent.setup();
+    const ready = product("ready", "Premium Whey", true, "current");
+    const blocked = {
+      ...ready,
+      readiness: {
+        ...ready.readiness,
+        ready: false,
+        blockers: product("ready", "Premium Whey", false, "none").readiness.blockers,
+      },
+    };
+    apiMocks.fetchProducts
+      .mockResolvedValueOnce({ currency: "PYG", as_of: "2026-09-22T12:00:00Z", products: [ready] })
+      .mockResolvedValue({ currency: "PYG", as_of: "2026-09-22T12:00:01Z", products: [blocked] });
+    apiMocks.createCatalogBuild.mockRejectedValue(Object.assign(new Error("One or more selected Products are no longer ready."), {
+      status: 409,
+      detail: {
+        code: "catalog_readiness_changed",
+        message: "One or more selected Products are no longer ready.",
+        products: [{ product_id: "ready", blockers: blocked.readiness.blockers }],
+      },
+    }));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.type(screen.getByRole("searchbox", { name: "Search products or brands" }), "Premium");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Layout" }), "dense");
+    const callsBeforeCreate = apiMocks.fetchProducts.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Needs attention: Premium Whey");
+    await waitFor(() => expect(apiMocks.fetchProducts.mock.calls.length).toBeGreaterThan(callsBeforeCreate));
+    expect(within(card).getByRole("checkbox")).toBeChecked();
+    expect(screen.getByRole("searchbox", { name: "Search products or brands" })).toHaveValue("Premium");
+    expect(screen.getByRole("combobox", { name: "Layout" })).toHaveValue("dense");
+  });
 
   it("opens editorial review, syncs approved copy, and preserves Builder selection", async () => {
     const user = userEvent.setup();

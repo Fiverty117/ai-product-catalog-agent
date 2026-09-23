@@ -1675,6 +1675,58 @@ class CatalogArtifactRead(ReadSchema):
     created_at: datetime
 
 
+CatalogBuildIdempotencyKey = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+]
+
+
+class CatalogBuildCreate(StrictSchema):
+    product_ids: NonEmptyUUIDList
+    catalog_brand_profile_id: uuid.UUID
+    layout_key: NonEmptyText
+    layout_version: NonEmptyText
+    currency: CurrencyCode = "PYG"
+    idempotency_key: CatalogBuildIdempotencyKey
+
+    @field_validator("product_ids")
+    @classmethod
+    def require_unique_products(cls, value: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("product_ids must be unique")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        return value.upper()
+
+
+class CatalogBuildArtifactSummary(StrictSchema):
+    id: uuid.UUID
+    created_at: datetime
+    page_count: int = Field(gt=0)
+    preview_url: NonEmptyText
+    download_url: NonEmptyText
+
+
+class CatalogBuildRead(StrictSchema):
+    id: uuid.UUID
+    status: Literal["queued", "running", "succeeded", "failed"]
+    catalog_snapshot_id: uuid.UUID
+    product_count: int = Field(gt=0)
+    currency: CurrencyCode
+    catalog_brand_profile_id: uuid.UUID
+    catalog_brand_key: CatalogBrandKey
+    catalog_brand_display_name: NonEmptyText
+    layout_key: Literal["classic", "dense", "compact"]
+    layout_version: NonEmptyText
+    layout_display_label: NonEmptyText
+    created_at: datetime
+    error: str | None
+    can_retry: bool
+    artifact: CatalogBuildArtifactSummary | None
+
+
 def _canonical_decimal_string(value: Decimal) -> str:
     text = format(value, "f")
     if "." in text:

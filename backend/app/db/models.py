@@ -543,6 +543,9 @@ class Job(Base):
     product_copy_runs: Mapped[list["ProductCopyRun"]] = relationship(
         back_populates="job"
     )
+    catalog_build: Mapped["CatalogBuild | None"] = relationship(
+        back_populates="job", uselist=False
+    )
 
 
 class ExtractionRun(Base):
@@ -1267,6 +1270,9 @@ class CatalogSnapshot(Base):
     artifacts: Mapped[list["CatalogArtifact"]] = relationship(
         back_populates="catalog_snapshot"
     )
+    catalog_build: Mapped["CatalogBuild | None"] = relationship(
+        back_populates="catalog_snapshot", uselist=False
+    )
 
 
 class CatalogBrandAsset(Base):
@@ -1469,3 +1475,44 @@ class CatalogArtifact(Base):
         back_populates="artifacts"
     )
     render_run: Mapped[CatalogRenderRun] = relationship(back_populates="artifact")
+
+
+class CatalogBuild(Base):
+    """Idempotent ownership for one explicit Catalog Builder create action."""
+
+    __tablename__ = "catalog_builds"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(idempotency_key)) > 0",
+            name="ck_catalog_builds_idempotency_key_nonempty",
+        ),
+        CheckConstraint(
+            "length(request_hash) = 64 "
+            "AND request_hash NOT GLOB '*[^0-9a-fA-F]*'",
+            name="ck_catalog_builds_request_hash_format",
+        ),
+        UniqueConstraint("idempotency_key", name="uq_catalog_builds_idempotency_key"),
+        UniqueConstraint("catalog_snapshot_id", name="uq_catalog_builds_snapshot"),
+        UniqueConstraint("job_id", name="uq_catalog_builds_job"),
+        Index("ix_catalog_builds_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    catalog_snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("catalog_snapshots.id"), nullable=False
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("jobs.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=utc_now
+    )
+
+    catalog_snapshot: Mapped[CatalogSnapshot] = relationship(
+        back_populates="catalog_build"
+    )
+    job: Mapped[Job] = relationship(back_populates="catalog_build")

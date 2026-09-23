@@ -20,6 +20,7 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "catalog_artifacts",
         "catalog_brand_assets",
         "catalog_brand_profiles",
+        "catalog_builds",
         "catalog_render_runs",
         "catalog_snapshots",
         "categories",

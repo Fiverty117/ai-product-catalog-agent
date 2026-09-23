@@ -187,3 +187,42 @@ The command prints only Job, render-run and PDF-artifact metadata. It does not
 persist or print self-contained HTML or embedded image data. Use
 `--requeue-failed` only when the same failed logical Job still has attempt
 budget.
+
+## Catalog Builder end-to-end smoke (Block 10C)
+
+From `backend`, use the existing local `catalog.db` for both API and worker.
+Install Chromium once if needed. The migration changes the real local database,
+so run these commands only when you are ready for the manual smoke:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m playwright install chromium
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+In a second terminal, from `backend`, start the existing durable JobWorker with
+the `catalog.render.v2` handler:
+
+```powershell
+cd backend
+$env:DATABASE_URL = "sqlite:///./catalog.db"
+.\.venv\Scripts\python.exe -m app.scripts.run_catalog_render_worker
+```
+
+In a third terminal, start React:
+
+```powershell
+cd frontend
+npm run dev -- --port 5174
+```
+
+Open `http://127.0.0.1:5174/catalog-builder`. Select **LANDERFIT Premium
+Whey** (`fd70be92-d0fe-46a7-9533-dbe50ecf6af5`), choose **Grabelan** and
+**Classic**, and click **Create catalog** once. Watch the queued/running state
+until **Catalog ready**, then preview and download the PDF. Visually confirm
+Grabelan publisher branding, LANDERFIT as Product Brand, the correct Product
+name and SKU, current approved/human copy, active PYG Price, and the selected
+approved enhanced image. Change the Builder control to Dense afterward; the
+already generated Classic result must still say Classic. This is a manual smoke;
+the test suite does not create a real LANDERFIT build.
