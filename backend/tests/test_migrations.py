@@ -43,6 +43,8 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "product_copy_manual_revisions",
         "product_identity_edits",
         "product_copy_runs",
+        "product_intake_items",
+        "product_intake_photos",
         "skus",
         "sku_field_provenance",
     }

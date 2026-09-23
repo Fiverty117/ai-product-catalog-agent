@@ -622,6 +622,38 @@ class ExtractionRun(Base):
     )
 
 
+class ProductIntakeItem(Base):
+    __tablename__ = "product_intake_items"
+    __table_args__ = (Index("ix_product_intake_items_updated_at", "updated_at", "id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    draft: Mapped[dict] = mapped_column(JSON, nullable=False)
+    human_edited: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    draft_source_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("extraction_runs.id"))
+    latest_job_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("jobs.id"))
+    latest_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("extraction_runs.id"))
+    latest_action_key: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now)
+    photos: Mapped[list["ProductIntakePhoto"]] = relationship(back_populates="item", order_by="ProductIntakePhoto.position")
+
+
+class ProductIntakePhoto(Base):
+    __tablename__ = "product_intake_photos"
+    __table_args__ = (
+        UniqueConstraint("intake_item_id", "position"),
+        UniqueConstraint("photo_id"),
+    )
+
+    intake_item_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("product_intake_items.id"), primary_key=True)
+    photo_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("photos.id"), primary_key=True)
+    position: Mapped[int] = mapped_column(nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    item: Mapped[ProductIntakeItem] = relationship(back_populates="photos")
+    photo: Mapped[Photo] = relationship()
+
+
 class ExtractionFieldReview(Base):
     __tablename__ = "extraction_field_reviews"
     __table_args__ = (

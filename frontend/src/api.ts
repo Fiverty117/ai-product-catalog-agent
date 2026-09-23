@@ -401,3 +401,62 @@ export function saveManualProductCopyRevision(
     body: JSON.stringify({ short_description: shortDescription }),
   });
 }
+
+export type IntakeSKU = {
+  flavor: string | null;
+  size_value: string | null;
+  size_unit: string | null;
+  servings: number | null;
+  external_sku: string | null;
+};
+
+export type IntakeDraft = {
+  schema_version: 1;
+  brand_name: string | null;
+  product_name: string | null;
+  primary_category_name: string | null;
+  secondary_category_names: string[];
+  skus: IntakeSKU[];
+  notes: string | null;
+};
+
+export type IntakeItem = {
+  id: string;
+  status: "draft" | "queued" | "running" | "review_required" | "failed";
+  created_at: string;
+  updated_at: string;
+  draft: IntakeDraft;
+  human_edited: boolean;
+  photos: { id: string; position: number; is_primary: boolean; original_filename: string; mime_type: string; image_url: string }[];
+  extraction: {
+    job_id: string | null; job_status: string | null; attempts: number | null;
+    max_attempts: number | null; run_id: string | null; run_status: string | null;
+    error: string | null; newer_result_available: boolean;
+    observation: Record<"brand_name" | "product_name" | "flavor" | "size_value" | "size_unit" | "servings", { value: string | number | null; state: "extracted" | "not_legible" | "not_present" }> | null;
+  };
+};
+
+export const fetchIntakeItems = (signal?: AbortSignal): Promise<{ items: IntakeItem[] }> =>
+  getJson("/api/product-intake/items", signal);
+export const fetchIntakeItem = (id: string, signal?: AbortSignal): Promise<IntakeItem> =>
+  getJson(`/api/product-intake/items/${id}`, signal);
+
+export async function createIntakeItem(files: File[]): Promise<IntakeItem> {
+  const form = new FormData();
+  files.forEach((file) => form.append("images", file));
+  const response = await fetch(resolveApiUrl("/api/product-intake/items"), {
+    method: "POST", headers: { Accept: "application/json" }, body: form,
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new ApiError(response.status, payload?.detail ?? `Upload failed (${response.status})`);
+  }
+  return response.json() as Promise<IntakeItem>;
+}
+
+export const saveIntakeDraft = (id: string, draft: IntakeDraft): Promise<IntakeItem> =>
+  requestJson(`/api/product-intake/items/${id}/draft`, { method: "PUT", body: JSON.stringify(draft) });
+export const runIntakeExtraction = (id: string, key: string): Promise<IntakeItem> =>
+  requestJson(`/api/product-intake/items/${id}/extractions`, { method: "POST", headers: { "Idempotency-Key": key } });
+export const setIntakePrimaryPhoto = (id: string, photoId: string): Promise<IntakeItem> =>
+  requestJson(`/api/product-intake/items/${id}/primary-photo`, { method: "PUT", body: JSON.stringify({ photo_id: photoId }) });

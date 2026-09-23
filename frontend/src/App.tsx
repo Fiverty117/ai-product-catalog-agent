@@ -1,12 +1,18 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes } from "react-router-dom";
 
 import { CatalogBuilderPage } from "./CatalogBuilderPage";
+import { ProductIntakePage } from "./ProductIntakePage";
 
 export function App() {
   return (
-    <Routes>
-      <Route path="/catalog-builder" element={<CatalogBuilderPage />} />
-      <Route path="*" element={<Navigate to="/catalog-builder" replace />} />
-    </Routes>
+    <>
+      <nav className="workspace-nav" aria-label="Workspaces"><Link to="/product-intake">Product Intake</Link><Link to="/catalog-builder">Catalog Builder</Link></nav>
+      <Routes>
+        <Route path="/product-intake" element={<ProductIntakePage />} />
+        <Route path="/product-intake/:intakeId" element={<ProductIntakePage />} />
+        <Route path="/catalog-builder" element={<CatalogBuilderPage />} />
+        <Route path="*" element={<Navigate to="/catalog-builder" replace />} />
+      </Routes>
+    </>
   );
 }
