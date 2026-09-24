@@ -11,9 +11,9 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db import Base, Brand, DerivedImageReview, Photo, Price, Product, SKU
+from app.db import Base, Brand, DerivedImageReview, Job, Photo, Price, Product, SKU
 from app.db.session import create_sqlite_engine, get_db
-from app.domain.enums import DerivedImageReviewDecision, PhotoRole
+from app.domain.enums import DerivedImageReviewDecision, JobStatus, PhotoRole
 from app.domain.schemas import ImageEnhancementJobPayload
 from app.main import app
 from app.services.categories import assign_product_category, create_category
@@ -164,3 +164,85 @@ def test_sku_owned_front_photo_is_exposed_without_ownership_mutation(store):
     with factory() as session:
         persisted = session.get(Photo, photo_id)
         assert persisted.product_id is None and persisted.sku_id == sku_id
+
+
+def test_explicit_generation_idempotency_status_retry_and_review_boundary(store):
+    factory, client, tmp_path = store
+    with factory() as session:
+        product, _, photo = make_context(session, tmp_path)
+        session.commit()
+        product_id, photo_id = product.id, photo.id
+    source_before = (tmp_path / "original.png").read_bytes()
+    url = f"/api/products/{product_id}/images/photos/{photo_id}/enhancements"
+    assert client.post(url).status_code == 422
+    first = client.post(url, headers={"Idempotency-Key": "first-click"})
+    assert first.status_code == 202, first.text
+    job_id = first.json()["generation"]["job_id"]
+    assert first.json()["editorial"]["can_generate"] is False
+    assert first.json()["editorial"]["derived_images"] == []
+    again = client.post(url, headers={"Idempotency-Key": "first-click"})
+    assert again.status_code == 202 and again.json()["generation"]["job_id"] == job_id
+    assert client.post(url, headers={"Idempotency-Key": "second-click"}).status_code == 409
+    status_url = f"/api/products/{product_id}/images/enhancements/{job_id}"
+    assert client.get(status_url).json()["status"] == "queued"
+    with factory() as session:
+        job = session.get(Job, uuid.UUID(job_id))
+        job.status = JobStatus.RUNNING
+        job.attempts = 1
+        session.commit()
+    assert client.get(status_url).json()["status"] == "running"
+    with factory() as session:
+        job = session.get(Job, uuid.UUID(job_id))
+        job.status = JobStatus.FAILED
+        job.last_error = "provider secret must stay private"
+        session.commit()
+    failed = client.get(status_url)
+    assert failed.json()["status"] == "failed"
+    assert "provider secret" not in failed.text
+    retried = client.post(f"{status_url}/retry")
+    assert retried.status_code == 202 and retried.json()["generation"]["job_id"] == job_id
+    assert retried.json()["generation"]["status"] == "queued"
+    with factory() as session:
+        job = session.get(Job, uuid.UUID(job_id))
+        job.status = JobStatus.FAILED
+        job.attempts = job.max_attempts
+        session.commit()
+    replacement = client.post(f"{status_url}/retry")
+    assert replacement.status_code == 202
+    replacement_id = replacement.json()["generation"]["job_id"]
+    assert replacement_id != job_id
+    assert client.post(f"{status_url}/retry").status_code == 202
+    with factory() as session:
+        assert session.query(Job).filter(Job.job_type == "image.enhance.v1").count() == 2
+        job = session.get(Job, uuid.UUID(replacement_id))
+        payload = ImageEnhancementJobPayload.model_validate(job.payload)
+        run = create_running_image_enhancement_run(session, payload=payload, job_id=job.id)
+        derived = complete_image_enhancement_run(session, run, stored_image=store_processed_image(image_bytes((66, 77, 88)), processed_dir=tmp_path / "processed"))
+        job.status = JobStatus.SUCCEEDED
+        session.commit()
+        derived_id = derived.id
+    editorial = client.get(f"/api/products/{product_id}/images/editorial").json()
+    assert editorial["effective"]["presentation"] == "original"
+    assert editorial["derived_images"][0]["derived_image_id"] == str(derived_id)
+    assert editorial["derived_images"][0]["review_state"] == "unreviewed"
+    assert editorial["derived_images"][0]["selectable"] is False
+    assert editorial["can_generate"] is True
+    assert (tmp_path / "original.png").read_bytes() == source_before
+    later = client.post(url, headers={"Idempotency-Key": "later-click"})
+    assert later.status_code == 202 and later.json()["generation"]["job_id"] not in {job_id, replacement_id}
+    assert client.get(f"/api/products/{uuid.uuid4()}/images/enhancements/{job_id}").status_code == 404
+
+
+def test_generation_rejects_invalid_or_non_current_source_without_enqueuing(store):
+    factory, client, tmp_path = store
+    with factory() as session:
+        product, _, photo = make_context(session, tmp_path)
+        session.commit()
+        product_id, photo_id = product.id, photo.id
+    url = f"/api/products/{product_id}/images/photos/{photo_id}/enhancements"
+    (tmp_path / "original.png").write_bytes(image_bytes((1, 1, 1)))
+    assert client.get(f"/api/products/{product_id}/images/editorial").json()["can_generate"] is False
+    assert client.post(url, headers={"Idempotency-Key": "invalid-source"}).status_code == 409
+    assert client.post(f"/api/products/{product_id}/images/photos/{uuid.uuid4()}/enhancements", headers={"Idempotency-Key": "unknown"}).status_code == 404
+    with factory() as session:
+        assert session.query(Job).count() == 0

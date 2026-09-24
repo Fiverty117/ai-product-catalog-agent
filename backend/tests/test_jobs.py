@@ -335,3 +335,21 @@ def test_worker_can_claim_only_explicitly_accepted_job_types(job_store) -> None:
     assert handled == [product_copy.id]
     assert load_job(session_factory, product_copy.id).status is JobStatus.SUCCEEDED
     assert load_job(session_factory, unrelated.id).status is JobStatus.QUEUED
+
+
+def test_dedicated_worker_recovers_only_its_accepted_job_type(job_store) -> None:
+    _, session_factory = job_store
+    now = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+    image = persist_job(session_factory, job_type="image.enhance.v1", idempotency_key="image-stale")
+    copy = persist_job(session_factory, job_type="product.copy.v1", idempotency_key="copy-stale")
+    with session_factory() as session:
+        for job_id in (image.id, copy.id):
+            row = session.get(Job, job_id)
+            row.status = JobStatus.RUNNING
+            row.attempts = 1
+            row.started_at = now - timedelta(minutes=11)
+        session.commit()
+    worker = JobWorker(session_factory, {}, accepted_job_types={"image.enhance.v1"}, clock=lambda: now)
+    assert worker.recover_stale_jobs(timedelta(minutes=10)) == 1
+    assert load_job(session_factory, image.id).status is JobStatus.QUEUED
+    assert load_job(session_factory, copy.id).status is JobStatus.RUNNING

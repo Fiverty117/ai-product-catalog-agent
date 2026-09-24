@@ -71,6 +71,8 @@ class StoredDerivedImage:
 
 def build_image_enhancement_idempotency_key(
     payload: ImageEnhancementJobPayload,
+    *,
+    generation_request_key: str | None = None,
 ) -> str:
     identity = {
         "job_type": IMAGE_ENHANCEMENT_JOB_TYPE,
@@ -82,6 +84,11 @@ def build_image_enhancement_idempotency_key(
         "config_version": payload.config_version,
         "parameters": payload.parameters,
     }
+    if generation_request_key is not None:
+        key = generation_request_key.strip()
+        if not key or len(key) > 200:
+            raise ValueError("generation_request_key must contain 1 to 200 characters")
+        identity["generation_request_key_sha256"] = hashlib.sha256(key.encode("utf-8")).hexdigest()
     digest = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
     return f"{IMAGE_ENHANCEMENT_JOB_TYPE}:{digest}"
 
@@ -100,6 +107,7 @@ def enqueue_image_enhancement(
     config_version: str = IMAGE_ENHANCEMENT_CONFIG_VERSION,
     parameters: Mapping[str, object] | None = None,
     max_attempts: int = 3,
+    generation_request_key: str | None = None,
 ) -> Job:
     photo = session.get(Photo, source_photo_id)
     if photo is None:
@@ -124,7 +132,9 @@ def enqueue_image_enhancement(
         session,
         job_type=IMAGE_ENHANCEMENT_JOB_TYPE,
         payload=payload.model_dump(mode="json"),
-        idempotency_key=build_image_enhancement_idempotency_key(payload),
+        idempotency_key=build_image_enhancement_idempotency_key(
+            payload, generation_request_key=generation_request_key,
+        ),
         max_attempts=max_attempts,
     )
 

@@ -1363,6 +1363,15 @@ class ProductImageDerivedSummary(StrictSchema):
     created_at: datetime
 
 
+class ProductImageGenerationSummary(StrictSchema):
+    job_id: uuid.UUID
+    status: JobStatus
+    attempts: int
+    max_attempts: int
+    can_retry: bool
+    created_at: datetime
+
+
 class ProductImageEditorialSummary(StrictSchema):
     product_id: uuid.UUID
     source_photo_id: uuid.UUID | None
@@ -1371,7 +1380,14 @@ class ProductImageEditorialSummary(StrictSchema):
     original_preview_url: str | None
     effective: ProductImageEffectiveSummary | None
     derived_images: list[ProductImageDerivedSummary]
+    generations: list[ProductImageGenerationSummary] = Field(default_factory=list)
+    can_generate: bool = False
     product: CatalogBuilderProductSummary
+
+
+class ProductImageGenerationResponse(StrictSchema):
+    generation: ProductImageGenerationSummary
+    editorial: ProductImageEditorialSummary
 
 
 class JobCreate(BaseModel):

@@ -1,16 +1,17 @@
 """Read and mutate existing Product image review/presentation state."""
+import hashlib
 import uuid
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import DerivedImage, Photo, Product, SKU
-from app.domain.enums import DerivedImageReviewState, PhotoPresentationAssetType
+from app.db.models import DerivedImage, Job, Photo, Product, SKU
+from app.domain.enums import DerivedImageReviewState, JobStatus, PhotoPresentationAssetType
 from app.domain.schemas import (
     DerivedImageReviewCreate, ProductDerivedImageReviewRequest, ProductImageDerivedSummary,
     ProductImageEditorialSummary, ProductImageEffectiveSummary,
-    ProductImagePresentationRequest,
+    ProductImageGenerationSummary, ProductImagePresentationRequest,
 )
 from app.services.catalog_builder import get_catalog_builder_product_summary
 from app.services.catalog_readiness import resolve_catalog_hero_source
@@ -19,6 +20,9 @@ from app.services.image_presentation import (
     resolve_effective_photo_presentation, select_derived_image_for_photo,
     use_original_photo_presentation,
 )
+from app.services.image_enhancement import IMAGE_ENHANCEMENT_JOB_TYPE, enqueue_image_enhancement
+from app.services.jobs import JobRecoveryError, requeue_failed_job
+from app.services.photo_intake import PhotoIntakeError, inspect_supported_image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -51,6 +55,7 @@ def get_product_image_editorial_summary(session: Session, product_id: uuid.UUID)
             derived_images=[], product=product,
         )
     effective = resolve_effective_photo_presentation(session, photo_id=photo.id)
+    jobs = _photo_generation_jobs(session, photo.id)
     derived = session.scalars(
         select(DerivedImage).where(DerivedImage.source_photo_id == photo.id)
         .order_by(DerivedImage.created_at.desc(), DerivedImage.id.desc())
@@ -70,8 +75,100 @@ def get_product_image_editorial_summary(session: Session, product_id: uuid.UUID)
             warnings=effective.warnings,
         ),
         derived_images=[_derived_summary(session, product_id, row, effective.derived_image_id) for row in derived],
+        generations=[image_generation_summary(job) for job in jobs],
+        can_generate=_source_valid(photo) and not any(_active(job) for job in jobs),
         product=product,
     )
+
+
+def enqueue_product_image_generation(session: Session, product_id: uuid.UUID, photo_id: uuid.UUID, request_key: str) -> Job:
+    photo = _require_current_source(session, product_id, photo_id)
+    if not _source_valid(photo):
+        raise ProductImageLifecycleConflictError("Source Photo is unavailable or invalid.")
+    active = next((job for job in _photo_generation_jobs(session, photo.id) if _active(job)), None)
+    job = enqueue_image_enhancement(session, source_photo_id=photo.id, generation_request_key=request_key)
+    if active is not None and active.id != job.id:
+        raise ProductImageLifecycleConflictError("An image enhancement is already in progress for this Photo.")
+    return job
+
+
+def get_product_image_generation(session: Session, product_id: uuid.UUID, job_id: uuid.UUID) -> Job:
+    job = session.get(Job, job_id)
+    if job is None or job.job_type != IMAGE_ENHANCEMENT_JOB_TYPE:
+        raise UnknownProductImageResourceError("Image enhancement not found.")
+    try:
+        photo_id = uuid.UUID(str(job.payload.get("source_photo_id", "")))
+    except ValueError:
+        raise UnknownProductImageResourceError("Image enhancement not found.") from None
+    _require_product_photo(session, product_id, photo_id)
+    return job
+
+
+def retry_product_image_generation(session: Session, product_id: uuid.UUID, job_id: uuid.UUID) -> Job:
+    job = get_product_image_generation(session, product_id, job_id)
+    if _active(job):
+        return job
+    if job.status is not JobStatus.FAILED:
+        raise ProductImageLifecycleConflictError("Only a failed image enhancement can be retried.")
+    photo_id = uuid.UUID(str(job.payload["source_photo_id"]))
+    _require_current_source(session, product_id, photo_id)
+    if not _source_valid(session.get(Photo, photo_id)):
+        raise ProductImageLifecycleConflictError("Source Photo is unavailable or invalid.")
+    active = next((other for other in _photo_generation_jobs(session, photo_id) if _active(other)), None)
+    if job.attempts < job.max_attempts:
+        if active is not None:
+            raise ProductImageLifecycleConflictError("An image enhancement is already in progress for this Photo.")
+        try:
+            return requeue_failed_job(session, job)
+        except JobRecoveryError as exc:
+            raise ProductImageLifecycleConflictError(str(exc)) from exc
+    replacement = enqueue_image_enhancement(
+        session, source_photo_id=photo_id,
+        provider=job.payload["provider"], model=job.payload["model"],
+        prompt_version=job.payload["prompt_version"], config_version=job.payload["config_version"],
+        parameters=job.payload["parameters"], generation_request_key=f"retry:{job.id}",
+    )
+    if active is not None and active.id != replacement.id:
+        raise ProductImageLifecycleConflictError("An image enhancement is already in progress for this Photo.")
+    if replacement.status is JobStatus.FAILED:
+        return retry_product_image_generation(session, product_id, replacement.id)
+    return replacement
+
+
+def image_generation_summary(job: Job) -> ProductImageGenerationSummary:
+    return ProductImageGenerationSummary(
+        job_id=job.id, status=job.status, attempts=job.attempts,
+        max_attempts=job.max_attempts, can_retry=job.status is JobStatus.FAILED,
+        created_at=job.created_at,
+    )
+
+
+def _active(job: Job) -> bool:
+    return job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
+
+
+def _photo_generation_jobs(session: Session, photo_id: uuid.UUID) -> list[Job]:
+    jobs = session.scalars(select(Job).where(Job.job_type == IMAGE_ENHANCEMENT_JOB_TYPE).order_by(Job.created_at.desc(), Job.id.desc())).all()
+    return [job for job in jobs if job.payload.get("source_photo_id") == str(photo_id)]
+
+
+def _require_current_source(session: Session, product_id: uuid.UUID, photo_id: uuid.UUID) -> Photo:
+    photo = _require_product_photo(session, product_id, photo_id)
+    current, _, _, _ = resolve_catalog_hero_source(session, product_id)
+    if current is None or current.id != photo.id or not photo.is_original:
+        raise ProductImageLifecycleConflictError("Photo is not the current original front source.")
+    return photo
+
+
+def _source_valid(photo: Photo) -> bool:
+    try:
+        content = _path(photo.file_path).read_bytes()
+        mime, _, width, height = inspect_supported_image(content)
+        return (hashlib.sha256(content).hexdigest() == photo.checksum_sha256.lower()
+                and mime == photo.mime_type and width == photo.width and height == photo.height
+                and len(content) == photo.file_size_bytes)
+    except (OSError, PhotoIntakeError):
+        return False
 
 
 def review_product_derived_image(session: Session, product_id: uuid.UUID, derived_image_id: uuid.UUID, request: ProductDerivedImageReviewRequest) -> None:

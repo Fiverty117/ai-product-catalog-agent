@@ -21,6 +21,8 @@ const apiMocks = vi.hoisted(() => ({
   addProductSKU: vi.fn(),
   changeProductPrice: vi.fn(),
   fetchProductImageEditorial: vi.fn(),
+  generateProductImage: vi.fn(),
+  retryProductImage: vi.fn(),
   reviewProductDerivedImage: vi.fn(),
   selectProductImagePresentation: vi.fn(),
 }));
@@ -110,6 +112,8 @@ function renderDrawer(onClose = vi.fn(), onProductUpdated = vi.fn()) {
 }
 
 beforeEach(() => {
+  apiMocks.generateProductImage.mockReset();
+  apiMocks.retryProductImage.mockReset();
   apiMocks.selectProductImagePresentation.mockReset();
   apiMocks.reviewProductDerivedImage.mockReset();
   apiMocks.fetchProductImageEditorial.mockResolvedValue({
@@ -156,6 +160,42 @@ beforeEach(() => {
 });
 
 describe("ProductEditorialDrawer", () => {
+  it("generates once, keeps the result pending review, and offers retry after failure", async () => {
+    const user = userEvent.setup();
+    const imageSummary = {
+      product_id: "product-1", source_photo_id: "photo-1", source_owner: "product" as const, source_sku_id: null,
+      original_preview_url: "/original", effective: { presentation: "original" as const, derived_image_id: null, preview_url: "/original", warnings: [] },
+      derived_images: [], generations: [], can_generate: true, product,
+    };
+    apiMocks.fetchProductImageEditorial.mockResolvedValue(imageSummary);
+    let resolveGeneration!: (value: unknown) => void;
+    apiMocks.generateProductImage.mockReturnValue(new Promise((resolve) => { resolveGeneration = resolve; }));
+    renderDrawer();
+    const generate = await screen.findByRole("button", { name: "Generate enhanced image" });
+    await user.click(generate);
+    await user.click(screen.getByRole("button", { name: "Enhancing image…" }));
+    expect(apiMocks.generateProductImage).toHaveBeenCalledTimes(1);
+    expect(apiMocks.generateProductImage).toHaveBeenCalledWith("product-1", "photo-1", expect.any(String));
+    const queued = { job_id: "job-image", status: "queued", attempts: 0, max_attempts: 3, can_retry: false, created_at: "2026-09-18T12:00:00Z" };
+    await act(async () => resolveGeneration({ generation: queued, editorial: { ...imageSummary, generations: [queued], can_generate: false } }));
+    expect(screen.getByText("Queued")).toBeVisible();
+    const failed = { ...queued, status: "failed", attempts: 3, can_retry: true };
+    apiMocks.fetchProductImageEditorial.mockResolvedValue({ ...imageSummary, generations: [failed] });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+    expect(await screen.findByText("Enhancement failed")).toBeVisible();
+    apiMocks.retryProductImage.mockResolvedValue({ generation: queued, editorial: { ...imageSummary, generations: [queued], can_generate: false } });
+    await user.click(screen.getByRole("button", { name: "Retry enhancement" }));
+    expect(apiMocks.retryProductImage).toHaveBeenCalledWith("product-1", "job-image");
+    const succeeded = { ...queued, status: "succeeded" };
+    apiMocks.fetchProductImageEditorial.mockResolvedValue({
+      ...imageSummary, generations: [succeeded], can_generate: true,
+      derived_images: [{ derived_image_id: "new-image", review_state: "unreviewed", selectable: false, asset_available: true, selected: false, preview_url: "/new", created_at: "2026-09-18T12:01:00Z" }],
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+    expect(within(screen.getByRole("region", { name: "Product image" })).getByText("Pending review")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Use enhanced image" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate enhanced image" })).toBeEnabled();
+  }, 10000);
   it("keeps image state visible and shows an error when selection fails", async () => {
     const imageSummary = {
       product_id: "product-1", source_photo_id: "photo-1", source_owner: "product" as const, source_sku_id: null,

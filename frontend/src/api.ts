@@ -200,11 +200,34 @@ export type ProductImageEditorialSummary = {
     preview_url: string | null;
     created_at: string;
   }[];
+  generations: ProductImageGeneration[];
+  can_generate: boolean;
   product: ProductSummary;
 };
 
+export type ProductImageGeneration = {
+  job_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  attempts: number;
+  max_attempts: number;
+  can_retry: boolean;
+  created_at: string;
+};
+
+export type ProductImageGenerationResponse = { generation: ProductImageGeneration; editorial: ProductImageEditorialSummary };
+
 export function fetchProductImageEditorial(productId: string, signal?: AbortSignal): Promise<ProductImageEditorialSummary> {
   return getJson(`/api/products/${productId}/images/editorial`, signal);
+}
+
+export function generateProductImage(productId: string, photoId: string, idempotencyKey: string): Promise<ProductImageGenerationResponse> {
+  return requestJson(`/api/products/${productId}/images/photos/${photoId}/enhancements`, {
+    method: "POST", headers: { "Idempotency-Key": idempotencyKey },
+  });
+}
+
+export function retryProductImage(productId: string, jobId: string): Promise<ProductImageGenerationResponse> {
+  return requestJson(`/api/products/${productId}/images/enhancements/${jobId}/retry`, { method: "POST" });
 }
 
 export function reviewProductDerivedImage(productId: string, derivedImageId: string, decision: "approved" | "rejected"): Promise<ProductImageEditorialSummary> {

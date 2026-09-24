@@ -19,7 +19,7 @@ const summary: ProductImageEditorialSummary = {
     { derived_image_id: "approved", review_state: "approved", selectable: true, asset_available: true, selected: true, preview_url: "/approved", created_at: "2026-09-18T12:00:00Z" },
     { derived_image_id: "pending", review_state: "unreviewed", selectable: false, asset_available: true, selected: false, preview_url: "/pending", created_at: "2026-09-18T12:01:00Z" },
     { derived_image_id: "rejected", review_state: "rejected", selectable: false, asset_available: true, selected: false, preview_url: "/rejected", created_at: "2026-09-18T12:02:00Z" },
-  ], product,
+  ], generations: [], can_generate: true, product,
 };
 
 describe("ProductImageEditor", () => {
@@ -29,6 +29,9 @@ describe("ProductImageEditor", () => {
     const { rerender } = render(<ProductImageEditor summary={summary} busyAction={null} onAction={onAction} />);
     expect(screen.getByText("Using: Enhanced image")).toBeVisible();
     expect(screen.getByText("Original source image")).toBeVisible();
+    expect(screen.getByRole("img", { name: "Selected source Photo" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Generate enhanced image" }));
+    expect(onAction).toHaveBeenCalledWith({ kind: "generate" });
     expect(screen.getByText("Pending review")).toBeVisible();
     expect(screen.getAllByText("Rejected").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Rejected" })).toBeDisabled();
@@ -52,5 +55,19 @@ describe("ProductImageEditor", () => {
     render(<ProductImageEditor summary={{ ...summary, effective: { ...summary.effective!, presentation: "original", derived_image_id: null }, derived_images: summary.derived_images.map((image) => image.derived_image_id === "approved" ? { ...image, selected: false } : image) }} busyAction="select-approved" onAction={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
+  });
+
+  it("shows queued, running, failed, and retry states without exposing selection of pending images", async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn().mockResolvedValue(undefined);
+    const job = { job_id: "job-1", status: "queued" as const, attempts: 0, max_attempts: 3, can_retry: false, created_at: "2026-09-18T12:00:00Z" };
+    const { rerender } = render(<ProductImageEditor summary={{ ...summary, can_generate: false, generations: [job] }} busyAction={null} onAction={onAction} />);
+    expect(screen.getByText("Queued")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Enhancing image…" })).toBeDisabled();
+    rerender(<ProductImageEditor summary={{ ...summary, can_generate: false, generations: [{ ...job, status: "running" }] }} busyAction={null} onAction={onAction} />);
+    expect(screen.getAllByText("Enhancing image…").length).toBeGreaterThan(0);
+    rerender(<ProductImageEditor summary={{ ...summary, generations: [{ ...job, status: "failed", can_retry: true }] }} busyAction={null} onAction={onAction} />);
+    await user.click(screen.getByRole("button", { name: "Retry enhancement" }));
+    expect(onAction).toHaveBeenCalledWith({ kind: "retry", jobId: "job-1" });
   });
 });

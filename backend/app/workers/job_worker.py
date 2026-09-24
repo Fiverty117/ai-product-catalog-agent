@@ -82,13 +82,14 @@ class JobWorker:
         now = self._clock()
         stale_before = now - stale_after
         with self._session_factory() as session:
-            stale_jobs = session.scalars(
-                select(Job).where(
+            query = select(Job).where(
                     Job.status == JobStatus.RUNNING,
                     Job.started_at.is_not(None),
                     Job.started_at <= stale_before,
                 )
-            ).all()
+            if self._accepted_job_types is not None:
+                query = query.where(Job.job_type.in_(self._accepted_job_types))
+            stale_jobs = session.scalars(query).all()
             for job in stale_jobs:
                 job.last_error = "recovered after stale running timeout"
                 if job.attempts >= job.max_attempts:

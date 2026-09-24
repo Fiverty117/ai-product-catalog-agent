@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -8,6 +8,8 @@ import {
   ProductImageEditorialSummary,
   fetchProductData,
   fetchProductImageEditorial,
+  generateProductImage,
+  retryProductImage,
   reviewProductDerivedImage,
   selectProductImagePresentation,
   saveProductIdentity,
@@ -64,6 +66,8 @@ export function ProductEditorialDrawer({
   const [productData, setProductData] = useState<ProductDataSummary | null>(null);
   const [imageSummary, setImageSummary] = useState<ProductImageEditorialSummary | null>(null);
   const [imageBusyAction, setImageBusyAction] = useState<string | null>(null);
+  const imageRequestKey = useRef<string | null>(null);
+  const imageRequestPending = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -83,6 +87,7 @@ export function ProductEditorialDrawer({
 
   useEffect(() => {
     const controller = new AbortController();
+    imageRequestKey.current = null;
     setSummary(null);
     setProductData(null);
     setImageSummary(null);
@@ -112,6 +117,18 @@ export function ProductEditorialDrawer({
     }, 2000);
     return () => window.clearInterval(interval);
   }, [refresh, summary?.has_active_generation]);
+
+  const imageActive = imageSummary?.generations?.some((job) => job.status === "queued" || job.status === "running") ?? false;
+  useEffect(() => {
+    if (!imageActive) return;
+    const controller = new AbortController();
+    const interval = window.setInterval(() => {
+      void fetchProductImageEditorial(productId, controller.signal)
+        .then((next) => { setImageSummary(next); onProductUpdated(next.product); })
+        .catch((caught: unknown) => { if ((caught as Error).name !== "AbortError") setError("Image enhancement status could not be refreshed."); });
+    }, 2000);
+    return () => { window.clearInterval(interval); controller.abort(); };
+  }, [imageActive, onProductUpdated, productId]);
 
   const handleGenerate = async () => {
     setBusyAction("generate");
@@ -205,10 +222,21 @@ export function ProductEditorialDrawer({
 
   const handleImageAction = async (action: ProductImageAction) => {
     if (!imageSummary?.source_photo_id) return;
-    const actionKey = action.kind === "review" ? `review-${action.derivedImageId}-${action.decision}` : action.derivedImageId ? `select-${action.derivedImageId}` : "select-original";
+    if (imageRequestPending.current) return;
+    imageRequestPending.current = true;
+    const actionKey = action.kind === "generate" ? "generate-image" : action.kind === "retry" ? `retry-image-${action.jobId}` : action.kind === "review" ? `review-${action.derivedImageId}-${action.decision}` : action.derivedImageId ? `select-${action.derivedImageId}` : "select-original";
     setImageBusyAction(actionKey);
     setError(null);
     try {
+      if (action.kind === "generate" || action.kind === "retry") {
+        if (action.kind === "generate") imageRequestKey.current ??= crypto.randomUUID();
+        const response = action.kind === "generate"
+          ? await generateProductImage(productId, imageSummary.source_photo_id, imageRequestKey.current!)
+          : await retryProductImage(productId, action.jobId);
+        setImageSummary(response.editorial);
+        if (action.kind === "generate") imageRequestKey.current = null;
+        return;
+      }
       const next = action.kind === "review"
         ? await reviewProductDerivedImage(productId, action.derivedImageId, action.decision)
         : await selectProductImagePresentation(productId, imageSummary.source_photo_id, action.derivedImageId);
@@ -220,6 +248,7 @@ export function ProductEditorialDrawer({
       setError(caught instanceof ApiError ? caught.message : "The Product image action could not be saved.");
     } finally {
       setImageBusyAction(null);
+      imageRequestPending.current = false;
     }
   };
 
