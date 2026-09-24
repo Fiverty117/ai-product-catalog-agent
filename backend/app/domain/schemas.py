@@ -1164,6 +1164,22 @@ class CatalogBuilderThemeSummary(StrictSchema):
     description: NonEmptyText
 
 
+class CatalogBuilderCoverLayoutSummary(StrictSchema):
+    key: Literal["minimal", "editorial", "hero"]
+    version: NonEmptyText
+    display_name: NonEmptyText
+    description: NonEmptyText
+    requires_hero: bool
+
+
+class CatalogCoverAssetRead(StrictSchema):
+    asset_id: uuid.UUID
+    mime_type: Literal["image/png", "image/jpeg", "image/webp"]
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    preview_url: NonEmptyText
+
+
 class ProductCopyEditorialEffectiveSummary(StrictSchema):
     state: ProductCopyResolutionState
     short_description: ProductShortDescription | None
@@ -1638,6 +1654,66 @@ class CatalogRenderJobPayloadV3(CatalogRenderJobPayloadV2):
         return self
 
 
+class FrozenCatalogCoverHero(StrictSchema):
+    source_cover_asset_id: uuid.UUID
+    checksum_sha256: Sha256
+    mime_type: Literal["image/png", "image/jpeg", "image/webp"]
+    file_size_bytes: int = Field(gt=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    storage_relative_path: Annotated[str, StringConstraints(pattern=r"^covers/[0-9a-f]{2}/[0-9a-f]{64}\.(?:png|jpg|webp)$")]
+
+    @model_validator(mode="after")
+    def validate_locator(self):
+        suffix = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}[self.mime_type]
+        if self.storage_relative_path != f"covers/{self.checksum_sha256[:2].lower()}/{self.checksum_sha256.lower()}{suffix}":
+            raise ValueError("cover hero locator must match frozen content identity")
+        return self
+
+
+class ResolvedCatalogCover(StrictSchema):
+    schema_version: Literal["catalog-cover-v1"]
+    enabled: bool
+    cover_key: Literal["minimal", "editorial", "hero"] | None = None
+    cover_version: NonEmptyText | None = None
+    title: str | None = None
+    subtitle: str | None = None
+    edition_label: str | None = None
+    show_publisher_logo: bool = False
+    hero: FrozenCatalogCoverHero | None = None
+
+    @field_validator("title", "subtitle", "edition_label")
+    @classmethod
+    def validate_frozen_text(cls, value: str | None, info):
+        if value is None:
+            return None
+        limits = {"title": 80, "subtitle": 180, "edition_label": 60}
+        if not value or len(value) > limits[info.field_name] or value != " ".join(value.split()) or "<" in value or ">" in value:
+            raise ValueError("frozen cover text is invalid")
+        return value
+
+    @model_validator(mode="after")
+    def validate_state(self):
+        if not self.enabled:
+            if any((self.cover_key, self.cover_version, self.title, self.subtitle, self.edition_label, self.show_publisher_logo, self.hero)):
+                raise ValueError("disabled cover must have no content")
+        elif not self.cover_key or not self.cover_version or not self.title or (self.cover_key == "hero" and self.hero is None):
+            raise ValueError("enabled cover requires layout, title and Hero image when applicable")
+        return self
+
+
+class CatalogRenderJobPayloadV4(CatalogRenderJobPayloadV3):
+    cover_schema_version: Literal["catalog-cover-v1"]
+    cover_hash: Sha256
+    cover_data: ResolvedCatalogCover
+
+    @model_validator(mode="after")
+    def validate_cover_lineage(self):
+        if self.cover_data.schema_version != self.cover_schema_version:
+            raise ValueError("frozen cover schema lineage does not match render Job")
+        return self
+
+
 class CatalogBrandingView(StrictSchema):
     display_name: NonEmptyText
     logo_data_uri: Annotated[str, StringConstraints(pattern=r"^data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$")] | None = None
@@ -1684,6 +1760,8 @@ class CatalogRenderViewModel(StrictSchema):
     store_name: NonEmptyText
     branding: CatalogBrandingView | None = None
     theme: ResolvedCatalogTheme | None = None
+    cover: ResolvedCatalogCover | None = None
+    cover_hero_data_uri: str | None = None
     layout: CatalogRenderLayoutView
     title: NonEmptyText
     as_of_label: NonEmptyText
@@ -1712,6 +1790,9 @@ class CatalogRenderRunRead(ReadSchema):
     theme_schema_version: str | None = None
     theme_hash: str | None = None
     theme_data: ResolvedCatalogTheme | None = None
+    cover_schema_version: str | None = None
+    cover_hash: str | None = None
+    cover_data: ResolvedCatalogCover | None = None
     status: ExtractionRunStatus
     sanitized_error: str | None
     started_at: datetime
@@ -1736,6 +1817,43 @@ CatalogBuildIdempotencyKey = Annotated[
 ]
 
 
+class CatalogCoverCreate(StrictSchema):
+    enabled: bool
+    cover_key: Literal["minimal", "editorial", "hero"] | None = None
+    cover_version: str | None = None
+    title: str | None = None
+    subtitle: str | None = None
+    edition_label: str | None = None
+    show_publisher_logo: bool | None = None
+    hero_asset_id: uuid.UUID | None = None
+
+    @field_validator("title", "subtitle", "edition_label", mode="before")
+    @classmethod
+    def normalize_plain_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("cover text must be plain text")
+        normalized = " ".join(value.split())
+        if "<" in normalized or ">" in normalized or any(ord(char) < 32 for char in normalized):
+            raise ValueError("cover text must not contain markup or control characters")
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_choice(self):
+        if not self.enabled:
+            if self.model_fields_set != {"enabled"}:
+                raise ValueError("disabled cover accepts only enabled=false")
+            return self
+        if not self.cover_key or not self.cover_version or not self.title:
+            raise ValueError("enabled cover requires layout and title")
+        if len(self.title) > 80 or (self.subtitle is not None and len(self.subtitle) > 180) or (self.edition_label is not None and len(self.edition_label) > 60):
+            raise ValueError("cover title, subtitle or edition exceeds length limit")
+        if self.cover_key == "hero" and self.hero_asset_id is None:
+            raise ValueError("Hero cover requires an uploaded image")
+        return self
+
+
 class CatalogBuildCreate(StrictSchema):
     product_ids: NonEmptyUUIDList
     catalog_brand_profile_id: uuid.UUID
@@ -1745,6 +1863,7 @@ class CatalogBuildCreate(StrictSchema):
     theme_version: str | None = None
     primary_color_override: CatalogBrandColor | None = None
     accent_color_override: CatalogBrandColor | None = None
+    cover: CatalogCoverCreate | None = None
     currency: CurrencyCode = "PYG"
     idempotency_key: CatalogBuildIdempotencyKey
 
@@ -1771,6 +1890,8 @@ class CatalogBuildCreate(StrictSchema):
             raise ValueError("theme key and version must be supplied together")
         if self.theme_key is None and (self.primary_color_override is not None or self.accent_color_override is not None):
             raise ValueError("palette overrides require a theme")
+        if self.theme_key is None and self.cover is not None:
+            raise ValueError("cover configuration requires a theme")
         return self
 
 
@@ -1800,6 +1921,15 @@ class CatalogBuildRead(StrictSchema):
     palette_source: Literal["publisher", "custom", "legacy"] = "legacy"
     primary_color: CatalogBrandColor | None = None
     accent_color: CatalogBrandColor | None = None
+    cover_enabled: bool = False
+    cover_key: str | None = None
+    cover_version: str | None = None
+    cover_display_label: str = "None"
+    cover_title: str | None = None
+    cover_subtitle: str | None = None
+    cover_edition_label: str | None = None
+    cover_show_publisher_logo: bool = False
+    cover_hero_present: bool = False
     created_at: datetime
     error: str | None
     can_retry: bool

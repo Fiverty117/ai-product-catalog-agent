@@ -7,6 +7,9 @@ import {
   CatalogBuildReadinessConflict,
   CatalogLayout,
   CatalogTheme,
+  CatalogCoverLayout,
+  CatalogCoverAsset,
+  CatalogCoverInput,
   ProductSummary,
   ApiError,
   createCatalogBuild,
@@ -14,9 +17,11 @@ import {
   fetchCatalogBuild,
   fetchLayouts,
   fetchThemes,
+  fetchCoverLayouts,
   fetchProducts,
   retryCatalogBuild,
   resolveApiUrl,
+  uploadCatalogCoverAsset,
 } from "./api";
 import { ProductEditorialDrawer } from "./editorial/ProductEditorialDrawer";
 
@@ -24,6 +29,8 @@ type ReadinessFilter = "all" | "ready" | "not_ready";
 const BUILD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BUILD_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 const VALID_COLOR = /^#[0-9A-Fa-f]{6}$/;
+const COVER_TEXT_HAS_MARKUP = /[<>]/;
+const COVER_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 function rememberBuildId(buildId: string): void {
   const url = new URL(window.location.href);
@@ -161,6 +168,7 @@ export function CatalogBuilderPage() {
   const [profiles, setProfiles] = useState<BrandProfile[] | null>(null);
   const [layouts, setLayouts] = useState<CatalogLayout[] | null>(null);
   const [themes, setThemes] = useState<CatalogTheme[] | null>(null);
+  const [coverLayouts, setCoverLayouts] = useState<CatalogCoverLayout[] | null>(null);
   const [search, setSearch] = useState("");
   const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -170,6 +178,15 @@ export function CatalogBuilderPage() {
   const [themeKey, setThemeKey] = useState<CatalogTheme["key"]>("minimal");
   const [primaryOverride, setPrimaryOverride] = useState<string | null>(null);
   const [accentOverride, setAccentOverride] = useState<string | null>(null);
+  const [coverEnabled, setCoverEnabled] = useState(false);
+  const [coverKey, setCoverKey] = useState<CatalogCoverLayout["key"]>("minimal");
+  const [coverTitle, setCoverTitle] = useState("Catálogo");
+  const [coverSubtitle, setCoverSubtitle] = useState("");
+  const [coverEdition, setCoverEdition] = useState("");
+  const [showPublisherLogo, setShowPublisherLogo] = useState(true);
+  const [coverHero, setCoverHero] = useState<CatalogCoverAsset | null>(null);
+  const [coverUploadError, setCoverUploadError] = useState<string | null>(null);
+  const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -207,11 +224,12 @@ export function CatalogBuilderPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all([fetchBrandProfiles(controller.signal), fetchLayouts(controller.signal), fetchThemes(controller.signal)])
-      .then(([nextProfiles, nextLayouts, nextThemes]) => {
+    Promise.all([fetchBrandProfiles(controller.signal), fetchLayouts(controller.signal), fetchThemes(controller.signal), fetchCoverLayouts(controller.signal)])
+      .then(([nextProfiles, nextLayouts, nextThemes, nextCoverLayouts]) => {
         setProfiles(nextProfiles);
         setLayouts(nextLayouts);
         setThemes(nextThemes);
+        setCoverLayouts(nextCoverLayouts);
         setBrandProfileId((current) => current || nextProfiles[0]?.id || "");
         if (!nextLayouts.some((layout) => layout.key === "classic") && nextLayouts[0]) {
           setLayoutKey(nextLayouts[0].key);
@@ -223,6 +241,7 @@ export function CatalogBuilderPage() {
           setProfiles([]);
           setLayouts([]);
           setThemes([]);
+          setCoverLayouts([]);
           setError("Catalog configuration could not be loaded.");
         }
       });
@@ -289,10 +308,20 @@ export function CatalogBuilderPage() {
   const selectedProfile = profiles?.find((profile) => profile.id === brandProfileId);
   const selectedLayout = layouts?.find((layout) => layout.key === layoutKey);
   const selectedTheme = themes?.find((theme) => theme.key === themeKey);
+  const selectedCoverLayout = coverLayouts?.find((layout) => layout.key === coverKey);
   const customPalette = primaryOverride !== null || accentOverride !== null;
   const primaryColor = primaryOverride ?? selectedProfile?.primary_color ?? "#000000";
   const accentColor = accentOverride ?? selectedProfile?.accent_color ?? "#000000";
   const paletteValid = VALID_COLOR.test(primaryColor) && VALID_COLOR.test(accentColor);
+  const normalizedCoverTitle = coverTitle.trim().replace(/\s+/g, " ");
+  const normalizedCoverSubtitle = coverSubtitle.trim().replace(/\s+/g, " ");
+  const normalizedCoverEdition = coverEdition.trim().replace(/\s+/g, " ");
+  const coverTextValid = !coverEnabled || (
+    normalizedCoverTitle.length > 0 && normalizedCoverTitle.length <= 80 &&
+    normalizedCoverSubtitle.length <= 180 && normalizedCoverEdition.length <= 60 &&
+    ![normalizedCoverTitle, normalizedCoverSubtitle, normalizedCoverEdition].some((value) => COVER_TEXT_HAS_MARKUP.test(value))
+  );
+  const coverValid = !coverEnabled || (Boolean(selectedCoverLayout) && coverTextValid && (!selectedCoverLayout?.requires_hero || Boolean(coverHero)));
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allSelectedReady = selectedIds.every((id) => selectedProducts[id]?.readiness.ready);
   const readyCount = products?.filter((product) => product.readiness.ready).length ?? 0;
@@ -326,7 +355,35 @@ export function CatalogBuilderPage() {
     );
   }, []);
 
-  const initialLoading = products === null || profiles === null || layouts === null || themes === null;
+  const initialLoading = products === null || profiles === null || layouts === null || themes === null || coverLayouts === null;
+
+  const resetCover = () => {
+    setCoverEnabled(false);
+    setCoverKey("minimal");
+    setCoverTitle("Catálogo");
+    setCoverSubtitle("");
+    setCoverEdition("");
+    setShowPublisherLogo(true);
+    setCoverHero(null);
+    setCoverUploadError(null);
+  };
+
+  const handleHeroUpload = async (file: File | undefined) => {
+    if (!file) return;
+    setCoverUploadError(null);
+    if (file.size > COVER_MAX_FILE_BYTES) {
+      setCoverUploadError("Cover image must be 10 MiB or smaller.");
+      return;
+    }
+    setIsUploadingCover(true);
+    try {
+      setCoverHero(await uploadCatalogCoverAsset(file));
+    } catch (caught: unknown) {
+      setCoverUploadError((caught as Error).message || "Cover image upload failed.");
+    } finally {
+      setIsUploadingCover(false);
+    }
+  };
 
   const applyReadinessConflict = (conflict: CatalogBuildReadinessConflict) => {
     setSelectedProducts((current) => {
@@ -358,11 +415,19 @@ export function CatalogBuilderPage() {
   const handleCreate = async () => {
     if (
       submittingRef.current || selectedIds.length === 0 ||
-      !brandProfileId || !selectedLayout || !selectedTheme || !paletteValid
+      !brandProfileId || !selectedLayout || !selectedTheme || !paletteValid || !coverValid || isUploadingCover
     ) return;
     submittingRef.current = true;
     setIsCreating(true);
     setBuildError(null);
+    const coverChoice: CatalogCoverInput = coverEnabled ? {
+      enabled: true, cover_key: selectedCoverLayout!.key, cover_version: selectedCoverLayout!.version,
+      title: normalizedCoverTitle,
+      ...(normalizedCoverSubtitle ? { subtitle: normalizedCoverSubtitle } : {}),
+      ...(normalizedCoverEdition ? { edition_label: normalizedCoverEdition } : {}),
+      show_publisher_logo: showPublisherLogo && Boolean(selectedProfile?.logo_url),
+      ...(coverHero ? { hero_asset_id: coverHero.asset_id } : {}),
+    } : { enabled: false };
     const choices = {
       product_ids: [...selectedIds],
       catalog_brand_profile_id: brandProfileId,
@@ -372,6 +437,7 @@ export function CatalogBuilderPage() {
       theme_version: selectedTheme.version,
       ...(primaryOverride !== null ? { primary_color_override: primaryOverride.toUpperCase() } : {}),
       ...(accentOverride !== null ? { accent_color_override: accentOverride.toUpperCase() } : {}),
+      cover: coverChoice,
       currency: "PYG",
     };
     const pending = pendingCreateRef.current;
@@ -384,6 +450,7 @@ export function CatalogBuilderPage() {
       theme_version: pending.theme_version,
       primary_color_override: pending.primary_color_override,
       accent_color_override: pending.accent_color_override,
+      cover: pending.cover,
       currency: pending.currency,
     }) === JSON.stringify(choices)
       ? pending
@@ -430,7 +497,7 @@ export function CatalogBuilderPage() {
     }
   };
 
-  const canCreate = selectedIds.length > 0 && Boolean(brandProfileId && selectedLayout && selectedTheme && paletteValid);
+  const canCreate = selectedIds.length > 0 && Boolean(brandProfileId && selectedLayout && selectedTheme && paletteValid && coverValid && !isUploadingCover);
 
   return (
     <main className="builder-shell">
@@ -497,6 +564,44 @@ export function CatalogBuilderPage() {
           </div>
           {!paletteValid && <p className="field-error" role="alert">Use #RRGGBB for both palette colors.</p>}
           {customPalette && <button type="button" onClick={() => { setPrimaryOverride(null); setAccentOverride(null); }}>Reset to publisher colors</button>}
+        </div>
+        <div className="cover-control" role="group" aria-label="Catalog cover">
+          <div className="cover-control-heading">
+            <div><strong>Cover</strong><p>Optional front page for this catalog edition.</p></div>
+            <label className="cover-enable"><input type="checkbox" checked={coverEnabled} onChange={(event) => setCoverEnabled(event.target.checked)} /> Include cover page</label>
+          </div>
+          {coverEnabled && <div className="cover-options">
+            <div role="group" aria-label="Cover style">
+              <span>Cover style</span>
+              <div className="cover-layout-grid">
+                {coverLayouts?.map((layout) => <label className={`cover-layout-option cover-layout-${layout.key}`} key={`${layout.key}-${layout.version}`}>
+                  <input type="radio" name="catalog-cover" value={layout.key} checked={coverKey === layout.key} onChange={() => setCoverKey(layout.key)} />
+                  <strong>{layout.display_name}</strong><small>{layout.description}</small>
+                </label>)}
+              </div>
+            </div>
+            <div className="cover-text-fields">
+              <label>Catalog title<input type="text" value={coverTitle} maxLength={80} onChange={(event) => setCoverTitle(event.target.value)} /></label>
+              <label>Subtitle (optional)<input type="text" value={coverSubtitle} maxLength={180} onChange={(event) => setCoverSubtitle(event.target.value)} /></label>
+              <label>Edition (optional)<input type="text" value={coverEdition} maxLength={60} onChange={(event) => setCoverEdition(event.target.value)} /></label>
+            </div>
+            <label className="cover-logo-control"><input type="checkbox" checked={showPublisherLogo && Boolean(selectedProfile?.logo_url)} disabled={!selectedProfile?.logo_url} onChange={(event) => setShowPublisherLogo(event.target.checked)} /> Show publisher logo{!selectedProfile?.logo_url ? " (no logo available)" : ""}</label>
+            <div className="cover-upload">
+              <label>Hero image (optional for Minimal/Editorial)
+                <input type="file" accept="image/png,image/jpeg,image/webp" disabled={isUploadingCover} onChange={(event) => { void handleHeroUpload(event.target.files?.[0]); event.target.value = ""; }} />
+              </label>
+              {isUploadingCover && <p role="status">Uploading cover image…</p>}
+              {coverUploadError && <p className="field-error" role="alert">{coverUploadError}</p>}
+              {coverHero && <div className="cover-uploaded">
+                <img src={resolveApiUrl(coverHero.preview_url)} alt="Uploaded cover Hero preview" />
+                <span>{coverHero.width} × {coverHero.height}</span>
+                <button type="button" onClick={() => setCoverHero(null)}>Remove Hero</button>
+              </div>}
+            </div>
+            {!coverTextValid && <p className="field-error" role="alert">Cover title is required (max 80 characters); subtitle/edition must be plain text within their limits.</p>}
+            {selectedCoverLayout?.requires_hero && !coverHero && <p className="field-error" role="alert">Hero cover requires an uploaded image.</p>}
+            <button type="button" className="cover-reset" onClick={resetCover}>Reset cover</button>
+          </div>}
         </div>
       </section>
 
@@ -576,6 +681,10 @@ export function CatalogBuilderPage() {
             <div><dt>Layout</dt><dd>{selectedLayout?.display_label ?? "Not available"}</dd></div>
             <div><dt>Theme</dt><dd>{selectedTheme?.display_name ?? "Not available"}</dd></div>
             <div><dt>Palette</dt><dd>{customPalette ? "Custom" : "Publisher colors"}</dd></div>
+            <div><dt>Cover</dt><dd>{coverEnabled ? selectedCoverLayout?.display_name ?? "Not available" : "None"}</dd></div>
+            {coverEnabled && <div><dt>Title</dt><dd>{normalizedCoverTitle || "—"}</dd></div>}
+            {coverEnabled && normalizedCoverEdition && <div><dt>Edition</dt><dd>{normalizedCoverEdition}</dd></div>}
+            {coverEnabled && <div><dt>Hero</dt><dd>{coverHero ? "Custom image" : "None"}</dd></div>}
             <div><dt>Columns</dt><dd>{selectedLayout?.products_per_row ?? "—"}</dd></div>
             <div><dt>Page</dt><dd>{selectedLayout ? `${selectedLayout.page_size} · ${selectedLayout.orientation}` : "—"}</dd></div>
             <div><dt>All selected Products ready</dt><dd>{selectedIds.length > 0 && allSelectedReady ? "Yes" : "—"}</dd></div>
@@ -606,6 +715,10 @@ export function CatalogBuilderPage() {
                 {" · "}{build.layout_display_label}
                 {" · "}{build.theme_display_label ?? "Legacy"}
                 {" · "}{build.palette_source === "custom" ? "Custom palette" : build.palette_source === "publisher" ? "Publisher colors" : "Legacy palette"}
+                {" · Cover: "}{build.cover_enabled ? build.cover_display_label ?? "Cover" : "None"}
+                {build.cover_title ? ` · ${build.cover_title}` : ""}
+                {build.cover_edition_label ? ` · ${build.cover_edition_label}` : ""}
+                {build.cover_hero_present ? " · Custom Hero" : ""}
                 {build.artifact ? ` · ${build.artifact.page_count} ${build.artifact.page_count === 1 ? "page" : "pages"}` : ""}
               </p>
               {(build.status === "queued" || build.status === "running") && (

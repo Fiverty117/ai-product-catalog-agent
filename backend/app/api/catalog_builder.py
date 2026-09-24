@@ -2,7 +2,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,8 @@ from app.domain.schemas import (
     CatalogBuilderBrandProfileSummary,
     CatalogBuilderLayoutSummary,
     CatalogBuilderThemeSummary,
+    CatalogBuilderCoverLayoutSummary,
+    CatalogCoverAssetRead,
     CatalogBuilderProductList,
     CatalogBuildCreate,
     CatalogBuildRead,
@@ -45,6 +47,13 @@ from app.services.catalog_builder import (
 )
 from app.rendering.catalog_layouts import UnknownCatalogLayoutError
 from app.rendering.catalog_themes import InvalidCatalogPaletteError, UnknownCatalogThemeError, catalog_theme_definitions
+from app.rendering.catalog_covers import UnknownCatalogCoverError, catalog_cover_definitions
+from app.db.models import CatalogCoverAsset
+from app.services.catalog_cover_assets import (
+    MAX_COVER_HERO_BYTES, CatalogCoverAssetError, CatalogCoverAssetIntegrityError,
+    CatalogCoverAssetTooLargeError, ingest_catalog_cover_asset, freeze_catalog_cover_asset,
+    UnknownCatalogCoverAssetError,
+)
 from app.services.catalog_readiness import UnknownCatalogReadinessProductError
 from app.services.catalog_snapshots import (
     CatalogSnapshotError,
@@ -93,6 +102,48 @@ def list_themes() -> list[CatalogBuilderThemeSummary]:
     ) for theme in catalog_theme_definitions()]
 
 
+@router.get("/cover-layouts", response_model=list[CatalogBuilderCoverLayoutSummary])
+def list_cover_layouts() -> list[CatalogBuilderCoverLayoutSummary]:
+    return [CatalogBuilderCoverLayoutSummary(
+        key=item.key, version=item.version, display_name=item.display_name,
+        description=item.description, requires_hero=item.requires_hero,
+    ) for item in catalog_cover_definitions()]
+
+
+@router.post("/cover-assets", response_model=CatalogCoverAssetRead)
+async def upload_cover_asset(
+    image: Annotated[UploadFile, File()],
+    session: Annotated[Session, Depends(get_db)],
+) -> CatalogCoverAssetRead:
+    content = await image.read(MAX_COVER_HERO_BYTES + 1)
+    try:
+        asset = ingest_catalog_cover_asset(session, content, declared_mime_type=image.content_type or "")
+        session.commit()
+    except CatalogCoverAssetTooLargeError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)) from exc
+    except CatalogCoverAssetError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    return CatalogCoverAssetRead(
+        asset_id=asset.id, mime_type=asset.mime_type, width=asset.width, height=asset.height,
+        preview_url=f"/api/catalog-builder/cover-assets/{asset.id}/image",
+    )
+
+
+@router.get("/cover-assets/{asset_id}/image", response_class=FileResponse)
+def cover_asset_image(asset_id: uuid.UUID, session: Annotated[Session, Depends(get_db)]) -> FileResponse:
+    asset = session.get(CatalogCoverAsset, asset_id)
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cover Hero image not found.")
+    try:
+        frozen = freeze_catalog_cover_asset(asset)
+    except CatalogCoverAssetIntegrityError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cover Hero image is unavailable.") from exc
+    path = Path(DEFAULT_STORAGE_ROOT) / frozen.storage_relative_path
+    return FileResponse(path, media_type=frozen.mime_type)
+
+
 @router.post("/builds", response_model=CatalogBuildRead)
 def create_build(
     request: CatalogBuildCreate,
@@ -119,6 +170,12 @@ def create_build(
         ) from exc
     except UnknownCatalogThemeError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except UnknownCatalogCoverError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except UnknownCatalogCoverAssetError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CatalogCoverAssetError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except InvalidCatalogPaletteError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except CatalogSnapshotReadinessError as exc:

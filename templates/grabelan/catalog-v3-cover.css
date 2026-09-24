@@ -1,0 +1,100 @@
+/* v4-only cover composition and restrained product-page typography polish. */
+.catalog-cover {
+  background: var(--surface-subtle);
+  break-after: page;
+  page-break-after: always;
+  break-inside: avoid;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  height: 270mm;
+  overflow: hidden;
+  padding: 16mm;
+  position: relative;
+}
+.catalog-cover .cover-content { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.catalog-cover .cover-brand { flex: 0 0 auto; }
+.catalog-cover .cover-logo { display: block; max-height: 28mm; max-width: 68mm; object-fit: contain; margin: 0 0 5mm; }
+.catalog-cover .cover-publisher { color: var(--brand-primary); font-size: 11.5pt; font-weight: 700; letter-spacing: .065em; line-height: 1.28; margin: 0; overflow-wrap: anywhere; text-transform: uppercase; }
+.catalog-cover .cover-headline { min-width: 0; }
+.catalog-cover .cover-edition { color: var(--brand-primary); font-size: 9.75pt; font-weight: 700; letter-spacing: .1em; line-height: 1.3; margin: 0 0 5mm; overflow-wrap: anywhere; text-transform: uppercase; }
+.catalog-cover .cover-title { font-size: 45pt; font-weight: 700; letter-spacing: -.035em; line-height: 1.05; margin: 0; overflow-wrap: anywhere; }
+.catalog-cover.cover-title-long .cover-title { font-size: 38pt; line-height: 1.06; }
+.catalog-cover .cover-subtitle { color: var(--text-secondary); font-size: 14.5pt; line-height: 1.34; margin: 6mm 0 0; overflow-wrap: anywhere; }
+.catalog-cover .cover-accent { background: var(--brand-accent); height: 1.2mm; margin-top: 8mm; width: 42mm; }
+.catalog-cover .cover-hero { align-items: center; background: var(--surface); display: flex; justify-content: center; min-height: 0; overflow: hidden; padding: 5mm; }
+.catalog-cover .cover-hero img { display: block; height: 100%; max-height: 100%; max-width: 100%; object-fit: contain; width: 100%; }
+
+.catalog-cover.cover-minimal { background: var(--page-bg); border-top: 2mm solid var(--brand-primary); }
+.catalog-cover.cover-minimal .cover-headline { margin: auto 0 70mm; max-width: 150mm; }
+.catalog-cover.cover-minimal .cover-hero { height: 80mm; margin-top: 8mm; width: 100%; }
+.catalog-cover.cover-minimal.cover-has-hero .cover-headline { margin: auto 0 8mm; }
+
+.catalog-cover.cover-editorial { background: var(--surface-subtle); display: grid; gap: 9mm; grid-template-columns: 1fr 43%; }
+.catalog-cover.cover-editorial .cover-content { min-width: 0; }
+.catalog-cover.cover-editorial .cover-headline { margin: auto 0 35mm; }
+.catalog-cover.cover-editorial .cover-title { font-size: 40pt; }
+.catalog-cover.cover-editorial.cover-title-long .cover-title { font-size: 34pt; }
+.catalog-cover.cover-editorial .cover-hero { align-self: stretch; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.catalog-cover.cover-editorial.cover-text-only { display: block; }
+.catalog-cover.cover-editorial.cover-text-only .cover-content { height: 100%; }
+.catalog-cover.cover-editorial.cover-text-only .cover-headline { border-left: 1.2mm solid var(--brand-accent); margin: auto 0 70mm; max-width: 155mm; padding-left: 10mm; }
+.catalog-cover.cover-editorial.cover-text-only .cover-accent { display: none; }
+.catalog-cover.cover-editorial.cover-has-logo { grid-template-columns: minmax(0, 1fr) 34%; }
+.catalog-cover.cover-editorial.cover-has-logo .cover-headline { margin-bottom: 70mm; }
+.catalog-cover.cover-editorial .cover-logo-media { align-items: center; align-self: center; border-top: 1.2mm solid var(--brand-accent); display: flex; height: 48mm; justify-content: center; min-width: 0; padding: 4mm 0; }
+.catalog-cover.cover-editorial .cover-logo-media img { display: block; height: auto; max-height: 43mm; max-width: 100%; object-fit: contain; width: auto; }
+
+.catalog-cover.cover-hero { background: var(--surface-subtle); }
+.catalog-cover.cover-hero .cover-content { flex: 0 0 auto; }
+.catalog-cover.cover-hero .cover-headline { margin: 12mm 0 8mm; }
+.catalog-cover.cover-hero .cover-title { font-size: 36pt; }
+.catalog-cover.cover-hero.cover-title-long .cover-title { font-size: 32pt; }
+.catalog-cover.cover-hero .cover-subtitle { font-size: 13pt; margin-top: 3mm; }
+.catalog-cover.cover-hero .cover-accent { margin-top: 5mm; }
+.catalog-cover.cover-hero .cover-hero { flex: 1 1 auto; border: 1px solid var(--border); border-radius: var(--radius); }
+
+.theme-premium .catalog-cover .cover-title { font-family: Georgia, "Times New Roman", serif; font-weight: 500; }
+.theme-organic .catalog-cover { border-radius: 5mm; }
+.theme-organic .catalog-cover .cover-hero { border-radius: 5mm; }
+.theme-bold .catalog-cover .cover-accent { height: 3mm; width: 60mm; }
+.theme-bold .catalog-cover.cover-editorial { border-left: 5mm solid var(--brand-primary); }
+
+/* The v1 base and v2 theme sheets stay frozen; these refinements apply to v4 only. */
+.catalog-header { margin-bottom: 5.5mm; padding-bottom: 3.5mm; }
+.publisher-logo { margin-bottom: 1mm; max-height: 15mm; }
+.store-name { font-size: 8.25pt; letter-spacing: .09em; }
+.catalog-header h1 { font-size: 26pt; }
+.category-section { margin-bottom: 6mm; }
+.category-title { font-size: 15pt; margin-bottom: 4mm; }
+.product-content { padding-bottom: 4.5mm; }
+.product-brand { font-size: 8.5pt; letter-spacing: .075em; margin-bottom: 1.6mm; }
+.product-description { font-size: 9.75pt; line-height: 1.43; margin-top: 2.4mm; }
+.variant-list { margin-top: 3.5mm; }
+.variant-row { padding: 2.1mm 0; }
+.variant-price { font-size: 13.25pt; }
+
+.theme-premium .product-description { color: #514b46; }
+.theme-premium .category-title { border-bottom-width: 1.25px; padding-bottom: 2.3mm; }
+.theme-premium .variant-price { border-bottom-width: 1.25px; padding-bottom: .55mm; }
+
+.layout-dense .catalog-header { margin-bottom: 5mm; }
+.layout-dense .category-section { margin-bottom: 6mm; }
+.layout-dense .catalog-header h1 { font-size: 22.5pt; }
+.layout-dense .category-title { font-size: 12.75pt; margin-bottom: 3mm; }
+.layout-dense .product-content { padding-bottom: 3.5mm; }
+.layout-dense .product-brand { font-size: 7pt; letter-spacing: .075em; margin-bottom: 1.1mm; }
+.layout-dense .product-description { font-size: 8.25pt; line-height: 1.36; margin-top: 1.8mm; }
+.layout-dense .variant-list { margin-top: 2.6mm; }
+.layout-dense .variant-row { padding: 1.5mm 0; }
+.layout-dense .variant-price { font-size: 10.75pt; }
+
+.layout-compact .catalog-header { margin-bottom: 4mm; }
+.layout-compact .category-section { margin-bottom: 5mm; }
+.layout-compact .catalog-header h1 { font-size: 19.25pt; }
+.layout-compact .category-title { font-size: 11.25pt; margin-bottom: 2.5mm; }
+.layout-compact .product-content { padding-bottom: 2.5mm; }
+.layout-compact .product-brand { font-size: 6.1pt; letter-spacing: .065em; margin-bottom: .8mm; }
+.layout-compact .variant-list { margin-top: 2mm; }
+.layout-compact .variant-row { padding: 1.5mm 0; }
+.layout-compact .variant-price { font-size: 9.5pt; }

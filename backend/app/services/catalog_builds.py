@@ -21,7 +21,9 @@ from app.domain.schemas import (
     CatalogRenderConfig,
     CatalogRenderJobPayloadV2,
     CatalogRenderJobPayloadV3,
+    CatalogRenderJobPayloadV4,
 )
+from app.rendering.catalog_covers import resolve_catalog_cover_definition
 from app.rendering.catalog_themes import resolve_catalog_theme_definition
 from app.rendering.catalog_layouts import (
     UnknownCatalogLayoutError,
@@ -33,8 +35,10 @@ from app.services.catalog_rendering import (
     DEFAULT_TEMPLATE_ROOT,
     CATALOG_RENDER_JOB_TYPE_V2,
     CATALOG_RENDER_JOB_TYPE_V3,
+    CATALOG_RENDER_JOB_TYPE_V4,
     enqueue_catalog_render_v2,
     enqueue_catalog_render_v3,
+    enqueue_catalog_render_v4,
     validate_catalog_pdf,
 )
 from app.services.catalog_snapshots import (
@@ -124,7 +128,7 @@ def create_catalog_build(
                 config=CatalogRenderConfig(layout=layout.key),
                 storage_root=storage_root, template_root=template_root,
             )
-        else:
+        elif request.cover is None:
             job = enqueue_catalog_render_v3(
                 session, catalog_snapshot_id=snapshot.id,
                 brand_profile_id=request.catalog_brand_profile_id,
@@ -132,6 +136,17 @@ def create_catalog_build(
                 primary_color_override=request.primary_color_override,
                 accent_color_override=request.accent_color_override,
                 config=CatalogRenderConfig(layout=layout.key, template_key="grabelan-catalog-v2"),
+                storage_root=storage_root, template_root=template_root,
+            )
+        else:
+            job = enqueue_catalog_render_v4(
+                session, catalog_snapshot_id=snapshot.id,
+                brand_profile_id=request.catalog_brand_profile_id,
+                theme_key=request.theme_key, theme_version=request.theme_version,
+                primary_color_override=request.primary_color_override,
+                accent_color_override=request.accent_color_override,
+                cover_choice=request.cover,
+                config=CatalogRenderConfig(layout=layout.key, template_key="grabelan-catalog-v3"),
                 storage_root=storage_root, template_root=template_root,
             )
         build = CatalogBuild(
@@ -160,10 +175,10 @@ def get_catalog_build(session: Session, build_id: uuid.UUID) -> CatalogBuildRead
     if build is None:
         raise UnknownCatalogBuildError(f"Catalog build not found: {build_id}")
     job = build.job
-    if job is None or job.job_type not in (CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3):
+    if job is None or job.job_type not in (CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3, CATALOG_RENDER_JOB_TYPE_V4):
         raise CatalogBuildIntegrityError("Catalog build render Job is invalid")
     try:
-        payload = (CatalogRenderJobPayloadV3 if job.job_type == CATALOG_RENDER_JOB_TYPE_V3 else CatalogRenderJobPayloadV2).model_validate(job.payload)
+        payload = (CatalogRenderJobPayloadV4 if job.job_type == CATALOG_RENDER_JOB_TYPE_V4 else CatalogRenderJobPayloadV3 if job.job_type == CATALOG_RENDER_JOB_TYPE_V3 else CatalogRenderJobPayloadV2).model_validate(job.payload)
     except ValidationError:
         raise CatalogBuildIntegrityError("Catalog build render configuration is invalid") from None
     if payload.catalog_snapshot_id != build.catalog_snapshot_id:
@@ -206,6 +221,16 @@ def get_catalog_build(session: Session, build_id: uuid.UUID) -> CatalogBuildRead
         palette_source=payload.theme_data.palette_source if isinstance(payload, CatalogRenderJobPayloadV3) else "legacy",
         primary_color=payload.theme_data.primary_color if isinstance(payload, CatalogRenderJobPayloadV3) else None,
         accent_color=payload.theme_data.accent_color if isinstance(payload, CatalogRenderJobPayloadV3) else None,
+        cover_enabled=payload.cover_data.enabled if isinstance(payload, CatalogRenderJobPayloadV4) else False,
+        cover_key=payload.cover_data.cover_key if isinstance(payload, CatalogRenderJobPayloadV4) else None,
+        cover_version=payload.cover_data.cover_version if isinstance(payload, CatalogRenderJobPayloadV4) else None,
+        cover_display_label=(resolve_catalog_cover_definition(payload.cover_data.cover_key, payload.cover_data.cover_version).display_name
+            if isinstance(payload, CatalogRenderJobPayloadV4) and payload.cover_data.enabled else "None"),
+        cover_title=payload.cover_data.title if isinstance(payload, CatalogRenderJobPayloadV4) else None,
+        cover_subtitle=payload.cover_data.subtitle if isinstance(payload, CatalogRenderJobPayloadV4) else None,
+        cover_edition_label=payload.cover_data.edition_label if isinstance(payload, CatalogRenderJobPayloadV4) else None,
+        cover_show_publisher_logo=payload.cover_data.show_publisher_logo if isinstance(payload, CatalogRenderJobPayloadV4) else False,
+        cover_hero_present=payload.cover_data.hero is not None if isinstance(payload, CatalogRenderJobPayloadV4) else False,
         created_at=build.created_at,
         error=(
             _public_render_error(latest_run.sanitized_error if latest_run else None)
@@ -245,7 +270,7 @@ def resolve_catalog_build_artifact_pdf(
         or run.status is not ExtractionRunStatus.SUCCEEDED
         or run.job_id is None
         or run.job is None
-        or run.job.job_type not in (CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3)
+        or run.job.job_type not in (CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3, CATALOG_RENDER_JOB_TYPE_V4)
         or run.job.catalog_build is None
         or run.job.catalog_build.catalog_snapshot_id != artifact.catalog_snapshot_id
         or artifact.catalog_snapshot_id != run.catalog_snapshot_id
@@ -294,6 +319,8 @@ def hash_catalog_build_request(request: CatalogBuildCreate) -> str:
             "primary_color_override": request.primary_color_override,
             "accent_color_override": request.accent_color_override,
         })
+    if request.cover is not None:
+        identity["cover"] = request.cover.model_dump(mode="json", exclude_none=True)
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -354,7 +381,7 @@ def _public_render_error(value: str | None) -> str:
     message = " ".join(value.lower().split())
     if "chromium" in message or "browser" in message:
         return "Chromium could not render the catalog PDF."
-    if "snapshot" in message or "asset" in message or "logo" in message:
+    if "snapshot" in message or "asset" in message or "logo" in message or "hero" in message:
         return "A frozen catalog asset is unavailable or invalid."
     if "template" in message or "configuration" in message:
         return "The catalog render configuration is no longer supported."

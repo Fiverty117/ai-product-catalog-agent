@@ -152,6 +152,30 @@ select:focus-visible {
 .palette-fields input[type="color"] { width: 42px; height: 36px; padding: 2px; border: 1px solid #cbd5cf; border-radius: 6px; }
 .palette-fields input[type="text"] { padding: 8px; border: 1px solid #cbd5cf; border-radius: 6px; font-family: monospace; }
 .palette-control button { margin-top: 9px; }
+
+.cover-control { grid-column: 1 / -1; border-top: 1px solid #e2e8e2; padding-top: 14px; }
+.cover-control-heading { align-items: center; display: flex; justify-content: space-between; gap: 18px; }
+.cover-control-heading p { color: #56645a; margin: 4px 0 0; }
+.cover-enable, .cover-logo-control { align-items: center; display: flex; gap: 8px; }
+.cover-options { display: grid; gap: 15px; margin-top: 16px; }
+.cover-layout-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 9px; }
+.cover-layout-option { background: #fff; border: 1px solid #d7dfd9; border-radius: 9px; cursor: pointer; display: grid; gap: 5px; padding: 12px; }
+.cover-layout-option:has(input:checked) { border-color: #496d50; box-shadow: inset 0 0 0 1px #496d50; }
+.cover-layout-option input { justify-self: start; }
+.cover-layout-option small { color: #66736b; font-weight: 400; }
+.cover-layout-editorial { background: linear-gradient(110deg, #f8f6f2 67%, #ede8dc 67%); }
+.cover-layout-hero { background: linear-gradient(#fff 45%, #e9efeb 45%); }
+.cover-text-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.cover-text-fields label { display: grid; gap: 5px; }
+.cover-upload { display: grid; gap: 7px; }
+.cover-upload > label { display: grid; gap: 6px; }
+.cover-uploaded { align-items: center; display: flex; gap: 12px; }
+.cover-uploaded img { background: #f4f6f3; border: 1px solid #d7dfd9; border-radius: 6px; height: 88px; object-fit: contain; width: 110px; }
+.cover-reset { justify-self: start; }
+@media (max-width: 760px) {
+  .cover-control-heading { align-items: start; flex-direction: column; }
+  .cover-layout-grid, .cover-text-fields { grid-template-columns: 1fr; }
+}
 .field-error { color: #a32f28 !important; }
 @media (max-width: 760px) { .theme-option-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 

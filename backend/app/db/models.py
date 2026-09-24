@@ -1348,6 +1348,28 @@ class CatalogBrandAsset(Base):
     profiles: Mapped[list["CatalogBrandProfile"]] = relationship(back_populates="logo_asset")
 
 
+class CatalogCoverAsset(Base):
+    """Immutable, presentation-only upload; not owned by a Brand profile."""
+
+    __tablename__ = "catalog_cover_assets"
+    __table_args__ = (
+        CheckConstraint("length(trim(file_path)) > 0", name="ck_catalog_cover_assets_path"),
+        CheckConstraint("length(checksum_sha256) = 64 AND checksum_sha256 NOT GLOB '*[^0-9a-fA-F]*'", name="ck_catalog_cover_assets_checksum"),
+        CheckConstraint("mime_type IN ('image/png', 'image/jpeg', 'image/webp')", name="ck_catalog_cover_assets_mime"),
+        CheckConstraint("file_size_bytes > 0 AND width > 0 AND height > 0", name="ck_catalog_cover_assets_dimensions"),
+        Index("ix_catalog_cover_assets_checksum", "checksum_sha256"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(nullable=False)
+    width: Mapped[int] = mapped_column(nullable=False)
+    height: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+
+
 class CatalogBrandProfile(Base):
     __tablename__ = "catalog_brand_profiles"
     __table_args__ = (
@@ -1445,6 +1467,9 @@ class CatalogRenderRun(Base):
     theme_schema_version: Mapped[str | None] = mapped_column(String(100))
     theme_hash: Mapped[str | None] = mapped_column(String(64))
     theme_data: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    cover_schema_version: Mapped[str | None] = mapped_column(String(100))
+    cover_hash: Mapped[str | None] = mapped_column(String(64))
+    cover_data: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     status: Mapped[ExtractionRunStatus] = mapped_column(
         Enum(
             ExtractionRunStatus,

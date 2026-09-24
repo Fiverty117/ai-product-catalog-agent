@@ -70,6 +70,7 @@ from app.services.product_copy import (
 from app.services.product_copy_review import apply_product_copy_review
 from app.workers.catalog_render_handler import catalog_render_handlers
 from app.workers.job_worker import JobWorker
+from app.services.catalog_cover_assets import ingest_catalog_cover_asset, freeze_catalog_cover_asset
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE_ROOT = PROJECT_ROOT / "templates" / "grabelan"
@@ -304,6 +305,109 @@ def test_themed_build_freezes_palette_and_reuses_action_identity(build_store):
         run = session.scalar(select(CatalogRenderRun).where(CatalogRenderRun.job_id == build.job_id))
         assert run.theme_hash == payload["theme_hash"] and run.theme_data["theme_key"] == "premium"
         assert session.get(CatalogBrandProfile, profile_id).primary_color == "#112233"
+
+
+def test_v4_cover_build_freezes_hero_edition_and_retry(build_store):
+    factory, client, storage_root, catalogs_dir = build_store
+    with factory() as session:
+        product, _, _, _, profile = _seed_ready(session, storage_root)
+        hero_a = ingest_catalog_cover_asset(session, _image_bytes(), declared_mime_type="image/png", storage_root=storage_root)
+        output = BytesIO()
+        Image.new("RGB", (40, 20), (180, 130, 80)).save(output, format="PNG")
+        hero_b = ingest_catalog_cover_asset(session, output.getvalue(), declared_mime_type="image/png", storage_root=storage_root)
+        session.commit()
+        hero_a_id, hero_b_id = hero_a.id, hero_b.id
+        profile_id = profile.id
+    layouts = client.get("/api/catalog-builder/cover-layouts")
+    assert layouts.status_code == 200
+    assert [item["key"] for item in layouts.json()] == ["minimal", "editorial", "hero"]
+    request = {**_request(product, profile), "theme_key": "premium", "theme_version": "1",
+        "cover": {"enabled": True, "cover_key": "hero", "cover_version": "1", "title": "Edición de prueba",
+            "subtitle": "Texto explícito", "edition_label": "2026", "show_publisher_logo": True,
+            "hero_asset_id": str(hero_a_id)}}
+    created = client.post("/api/catalog-builder/builds", json=request)
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert (body["cover_display_label"], body["cover_title"], body["cover_edition_label"], body["cover_hero_present"]) == ("Hero", "Edición de prueba", "2026", True)
+    assert body["cover_show_publisher_logo"] is False  # no actual logo in frozen Branding
+    assert client.post("/api/catalog-builder/builds", json=request).json()["id"] == body["id"]
+    for field, value in (("title", "Otro título"), ("hero_asset_id", str(hero_b_id)), ("cover_key", "editorial")):
+        changed = {**request, "cover": {**request["cover"], field: value}}
+        assert client.post("/api/catalog-builder/builds", json=changed).status_code == 409
+    next_request = {**request, "idempotency_key": "new-cover-action", "cover": {**request["cover"], "cover_key": "editorial"}}
+    assert client.post("/api/catalog-builder/builds", json=next_request).status_code == 200
+    missing = {**request, "idempotency_key": "missing-hero", "cover": {**request["cover"], "hero_asset_id": str(uuid.uuid4())}}
+    assert client.post("/api/catalog-builder/builds", json=missing).status_code == 404
+    no_image = {**request, "idempotency_key": "no-hero", "cover": {"enabled": True, "cover_key": "hero", "cover_version": "1", "title": "Catálogo"}}
+    assert client.post("/api/catalog-builder/builds", json=no_image).status_code == 422
+    with factory() as session:
+        build = session.get(CatalogBuild, uuid.UUID(body["id"]))
+        assert build.job.job_type == "catalog.render.v4"
+        frozen = build.job.payload["cover_data"]
+        assert frozen["hero"]["source_cover_asset_id"] == str(hero_a_id)
+        original_hash = build.job.payload["cover_hash"]
+        session.get(CatalogBrandProfile, profile_id).display_name = "Changed Publisher"
+        build.job.status = JobStatus.FAILED
+        build.job.attempts = 1
+        session.commit()
+    assert client.post(f"/api/catalog-builder/builds/{body['id']}/retry").status_code == 200
+    renderer = FakeRenderer(_valid_pdf())
+    worker = JobWorker(factory, catalog_render_handlers(factory, renderer, storage_root=storage_root,
+        catalogs_dir=catalogs_dir, template_root=TEMPLATE_ROOT), accepted_job_types={"catalog.render.v4"})
+    worker.run_once()
+    assert renderer.html is not None and "Edición de prueba" in renderer.html and "cover-hero" in renderer.html
+    assert "Grabelan Natural Market" in renderer.html and "Changed Publisher" not in renderer.html
+    restored = client.get(f"/api/catalog-builder/builds/{body['id']}").json()
+    assert restored["cover_title"] == "Edición de prueba" and restored["status"] == "succeeded"
+    with factory() as session:
+        build = session.get(CatalogBuild, uuid.UUID(body["id"]))
+        run = session.scalar(select(CatalogRenderRun).where(CatalogRenderRun.job_id == build.job_id))
+        assert run.cover_hash == original_hash and run.cover_data == frozen
+
+
+def test_cover_upload_and_safe_media_api(build_store, monkeypatch):
+    factory, client, storage_root, _ = build_store
+    import app.services.catalog_cover_assets as cover_assets_service
+    real_ingest = cover_assets_service.ingest_catalog_cover_asset
+    real_freeze = cover_assets_service.freeze_catalog_cover_asset
+    monkeypatch.setattr(catalog_builder_api, "ingest_catalog_cover_asset", lambda session, content, declared_mime_type: real_ingest(
+        session, content, declared_mime_type=declared_mime_type, storage_root=storage_root))
+    monkeypatch.setattr(catalog_builder_api, "freeze_catalog_cover_asset", lambda asset: real_freeze(asset, storage_root=storage_root))
+    monkeypatch.setattr(catalog_builder_api, "DEFAULT_STORAGE_ROOT", storage_root)
+    content = _image_bytes()
+    response = client.post("/api/catalog-builder/cover-assets", files={"image": ("hero.png", content, "image/png")})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["mime_type"], body["width"], body["height"]) == ("image/png", 24, 36)
+    assert "file_path" not in body and "checksum" not in body
+    assert client.get(body["preview_url"]).content == content
+    duplicate = client.post("/api/catalog-builder/cover-assets", files={"image": ("again.png", content, "image/png")})
+    assert duplicate.json()["asset_id"] == body["asset_id"]
+    assert client.get(f"/api/catalog-builder/cover-assets/{uuid.uuid4()}/image").status_code == 404
+    assert client.post("/api/catalog-builder/cover-assets", files={"image": ("bad.png", b"broken", "image/png")}).status_code == 422
+    assert client.post("/api/catalog-builder/cover-assets", files={"image": ("wrong.jpg", content, "image/jpeg")}).status_code == 422
+    assert client.post("/api/catalog-builder/cover-assets", files={"image": ("large.png", b"x" * (10 * 1024 * 1024 + 1), "image/png")}).status_code == 413
+
+
+def test_v4_disabled_cover_is_frozen_without_fabricating_v3_cover(build_store):
+    factory, client, storage_root, _ = build_store
+    with factory() as session:
+        product, _, _, _, profile = _seed_ready(session, storage_root)
+    request = {**_request(product, profile), "theme_key": "premium", "theme_version": "1", "cover": {"enabled": False}}
+    created = client.post("/api/catalog-builder/builds", json=request)
+    assert created.status_code == 200, created.text
+    assert created.json()["cover_enabled"] is False and created.json()["cover_display_label"] == "None"
+    with factory() as session:
+        build = session.get(CatalogBuild, uuid.UUID(created.json()["id"]))
+        assert build.job.job_type == "catalog.render.v4"
+        assert build.job.payload["cover_data"]["enabled"] is False
+        assert build.job.payload["cover_data"]["title"] is None
+    old = {key: value for key, value in request.items() if key != "cover"}
+    old["idempotency_key"] = "old-v3-action"
+    historical = client.post("/api/catalog-builder/builds", json=old)
+    assert historical.status_code == 200 and historical.json()["cover_display_label"] == "None"
+    with factory() as session:
+        assert session.get(CatalogBuild, uuid.UUID(historical.json()["id"])).job.job_type == "catalog.render.v3"
 
 
 def test_create_is_authoritative_transactional_and_idempotent(build_store):

@@ -7,6 +7,7 @@ import type {
   CatalogBuild,
   CatalogLayout,
   CatalogTheme,
+  CatalogCoverLayout,
   ProductCopyEditorialSummary,
   ProductSummary,
 } from "./api";
@@ -16,6 +17,8 @@ const apiMocks = vi.hoisted(() => ({
   fetchBrandProfiles: vi.fn(),
   fetchLayouts: vi.fn(),
   fetchThemes: vi.fn(),
+  fetchCoverLayouts: vi.fn(),
+  uploadCatalogCoverAsset: vi.fn(),
   fetchProductCopyEditorial: vi.fn(),
   generateProductCopy: vi.fn(),
   retryProductCopyGeneration: vi.fn(),
@@ -49,6 +52,11 @@ const themes: CatalogTheme[] = [
   { key: "premium", version: "1", display_name: "Premium", description: "Editorial and refined" },
   { key: "organic", version: "1", display_name: "Organic", description: "Soft and natural" },
   { key: "bold", version: "1", display_name: "Bold", description: "High-contrast retail" },
+];
+const coverLayouts: CatalogCoverLayout[] = [
+  { key: "minimal", version: "1", display_name: "Minimal", description: "Clean and publisher-first", requires_hero: false },
+  { key: "editorial", version: "1", display_name: "Editorial", description: "Structured and expressive", requires_hero: false },
+  { key: "hero", version: "1", display_name: "Hero", description: "Image-led presentation", requires_hero: true },
 ];
 
 const profiles: BrandProfile[] = [
@@ -147,6 +155,8 @@ beforeEach(() => {
   apiMocks.fetchBrandProfiles.mockResolvedValue(profiles);
   apiMocks.fetchLayouts.mockResolvedValue(layouts);
   apiMocks.fetchThemes.mockResolvedValue(themes);
+  apiMocks.fetchCoverLayouts.mockResolvedValue(coverLayouts);
+  apiMocks.uploadCatalogCoverAsset.mockReset();
   apiMocks.fetchProducts.mockImplementation((search: string) => Promise.resolve({
     currency: "PYG",
     as_of: "2026-09-17T12:00:00Z",
@@ -252,6 +262,120 @@ describe("CatalogBuilderPage", () => {
     expect(within(summary).getByText("Palette").nextElementSibling).toHaveTextContent("Publisher colors");
   }, 20000);
 
+  it("keeps cover disabled by default and sends the canonical disabled choice", async () => {
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("queued"));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    expect(apiMocks.fetchCoverLayouts).toHaveBeenCalled();
+    expect(screen.getByRole("checkbox", { name: "Include cover page" })).not.toBeChecked();
+    expect(within(screen.getByRole("complementary", { name: "Catalog summary" })).getByText("Cover").nextElementSibling).toHaveTextContent("None");
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0].cover).toEqual({ enabled: false });
+  });
+
+  it("validates cover text and freezes edition while controls change", async () => {
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("running", {
+      cover_enabled: true, cover_key: "editorial", cover_display_label: "Editorial",
+      cover_title: "Catálogo Salud", cover_edition_label: "2026", cover_hero_present: false,
+      theme_display_label: "Premium", palette_source: "publisher",
+    }));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("checkbox", { name: "Include cover page" }));
+    const styles = screen.getByRole("group", { name: "Cover style" });
+    await user.click(within(styles).getByRole("radio", { name: /Editorial/ }));
+    await user.clear(screen.getByRole("textbox", { name: "Catalog title" }));
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    await user.type(screen.getByRole("textbox", { name: "Catalog title" }), "Catálogo Salud");
+    await user.type(screen.getByRole("textbox", { name: "Subtitle (optional)" }), "Productos seleccionados");
+    await user.type(screen.getByRole("textbox", { name: "Edition (optional)" }), "2026");
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0].cover).toEqual({
+      enabled: true, cover_key: "editorial", cover_version: "1", title: "Catálogo Salud",
+      subtitle: "Productos seleccionados", edition_label: "2026", show_publisher_logo: false,
+    });
+    await user.clear(screen.getByRole("textbox", { name: "Catalog title" }));
+    await user.type(screen.getByRole("textbox", { name: "Catalog title" }), "Next Build");
+    expect(screen.getByText(/Cover: Editorial · Catálogo Salud · 2026/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Reset cover" }));
+    expect(screen.getByRole("checkbox", { name: "Include cover page" })).not.toBeChecked();
+    expect(screen.getByText(/Cover: Editorial · Catálogo Salud · 2026/)).toBeVisible();
+  }, 15000);
+
+  it("uploads and removes a Hero for next Build without changing the active result", async () => {
+    const user = userEvent.setup();
+    apiMocks.uploadCatalogCoverAsset.mockResolvedValue({ asset_id: "hero-a", mime_type: "image/png", width: 30, height: 40, preview_url: "/api/catalog-builder/cover-assets/hero-a/image" });
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("queued", {
+      cover_enabled: true, cover_key: "hero", cover_display_label: "Hero", cover_title: "Catálogo",
+      cover_hero_present: true,
+    }));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("checkbox", { name: "Include cover page" }));
+    await user.click(within(screen.getByRole("group", { name: "Cover style" })).getByRole("radio", { name: /Hero/ }));
+    expect(screen.getByText("Hero cover requires an uploaded image.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    const input = screen.getByLabelText(/Hero image/);
+    await user.upload(input, new File(["fake"], "bad.png", { type: "image/png" }));
+    expect(await screen.findByRole("img", { name: "Uploaded cover Hero preview" })).toHaveAttribute("src", expect.stringContaining("hero-a/image"));
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0].cover.hero_asset_id).toBe("hero-a");
+    await user.click(screen.getByRole("button", { name: "Remove Hero" }));
+    expect(screen.getByText(/Cover: Hero · Catálogo · Custom Hero/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+  }, 15000);
+
+  it("shows a rejected Hero upload without silently selecting it", async () => {
+    const user = userEvent.setup();
+    apiMocks.uploadCatalogCoverAsset.mockRejectedValue(new Error("Image content does not match MIME type"));
+    render(<CatalogBuilderPage />);
+    await screen.findByRole("heading", { name: "Premium Whey" });
+    await user.click(screen.getByRole("checkbox", { name: "Include cover page" }));
+    await user.upload(screen.getByLabelText(/Hero image/), new File(["fake"], "wrong.png", { type: "image/png" }));
+    expect(await screen.findByText("Image content does not match MIME type")).toBeVisible();
+    expect(screen.queryByRole("img", { name: "Uploaded cover Hero preview" })).not.toBeInTheDocument();
+  });
+
+  it("uses the actual publisher logo setting only for the next Cover Build", async () => {
+    const user = userEvent.setup();
+    apiMocks.fetchBrandProfiles.mockResolvedValue([{ ...profiles[0], logo_url: "/api/catalog-builder/brand-profiles/brand-1/logo" }]);
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("queued", { cover_enabled: true, cover_display_label: "Minimal", cover_title: "Catálogo", cover_show_publisher_logo: false }));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("checkbox", { name: "Include cover page" }));
+    const showLogo = screen.getByRole("checkbox", { name: "Show publisher logo" });
+    expect(showLogo).toBeChecked();
+    await user.click(showLogo);
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0].cover.show_publisher_logo).toBe(false);
+    await user.click(showLogo);
+    expect(screen.queryByText(/Cover: Minimal · Custom Hero/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Cover: Minimal · Catálogo/)).toBeVisible();
+  });
+
+  it("blocks Create while a new Hero upload is pending", async () => {
+    const user = userEvent.setup();
+    let resolveAsset!: (value: { asset_id: string; mime_type: string; width: number; height: number; preview_url: string }) => void;
+    apiMocks.uploadCatalogCoverAsset.mockReturnValue(new Promise((resolve) => { resolveAsset = resolve; }));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("checkbox", { name: "Include cover page" }));
+    await user.upload(screen.getByLabelText(/Hero image/), new File(["fake"], "pending.png", { type: "image/png" }));
+    expect(screen.getByText("Uploading cover image…")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    await act(async () => resolveAsset({ asset_id: "hero-2", mime_type: "image/png", width: 20, height: 20, preview_url: "/api/catalog-builder/cover-assets/hero-2/image" }));
+    expect(await screen.findByRole("img", { name: "Uploaded cover Hero preview" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeEnabled();
+  });
+
   it("sends no overrides for publisher colors and reads historical builds as Legacy", async () => {
     const user = userEvent.setup();
     apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("succeeded"));
@@ -310,6 +434,7 @@ describe("CatalogBuilderPage", () => {
     window.history.replaceState({}, "", `/catalog-builder?build=${buildId}`);
     apiMocks.fetchCatalogBuild.mockResolvedValue(catalogBuild("succeeded", {
       id: buildId,
+      cover_enabled: true, cover_key: "editorial", cover_display_label: "Editorial", cover_title: "Edición histórica", cover_edition_label: "2026",
       artifact: {
         id: "artifact-1",
         created_at: "2026-09-22T12:00:03Z",
@@ -320,6 +445,7 @@ describe("CatalogBuilderPage", () => {
     }));
     render(<CatalogBuilderPage />);
     expect(await screen.findByRole("heading", { name: "Catalog ready" })).toBeVisible();
+    expect(screen.getByText(/Cover: Editorial · Edición histórica · 2026/)).toBeVisible();
     expect(apiMocks.fetchCatalogBuild).toHaveBeenCalledWith(buildId, expect.any(AbortSignal));
   });
 

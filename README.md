@@ -201,8 +201,8 @@ cd backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-In a second terminal, from `backend`, start the existing durable JobWorker with
-the `catalog.render.v2` handler:
+In a second terminal, from `backend`, start the existing durable JobWorker
+(supports `catalog.render.v2`, v3 and v4):
 
 ```powershell
 cd backend
@@ -226,3 +226,24 @@ name and SKU, current approved/human copy, active PYG Price, and the selected
 approved enhanced image. Change the Builder control to Dense afterward; the
 already generated Classic result must still say Classic. This is a manual smoke;
 the test suite does not create a real LANDERFIT build.
+
+## Optional catalog cover and edition (Block 12B)
+
+The Builder can add exactly one front cover using the versioned Minimal,
+Editorial or Hero composition. Edition title, subtitle and label are explicit
+user-entered plain text. Hero requires an uploaded image; Minimal and Editorial
+also work without one. Cover choices are frozen in `catalog.render.v4` and do
+not change Product pages, the publisher profile or historical v2/v3 artifacts.
+
+Hero uploads accept decoded PNG, JPEG or WEBP up to **10 MiB and 24 million
+pixels**. The upload MIME type must match the decoded content. Bytes are kept
+immutably by checksum under local `storage/covers`; the API exposes only an
+asset ID and a verified image endpoint. Removing a Hero from the Builder only
+removes its reference for the next Build. An upload never used by a Build may
+remain as an unreferenced asset; 12B has no garbage collector.
+
+After upgrading the local database with `python -m alembic upgrade head`, use
+the same Catalog render worker command above. It now accepts v2, v3 and v4
+Jobs. Frontend development remains on port 5174. The synthetic developer-only
+gallery can be regenerated with `python -m app.scripts.render_cover_gallery`
+from `backend`; it writes ignored PDFs under `tmp/pdfs` and uses no real Builds.

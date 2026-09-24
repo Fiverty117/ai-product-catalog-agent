@@ -73,6 +73,33 @@ export type CatalogTheme = {
   description: string;
 };
 
+export type CatalogCoverLayout = {
+  key: "minimal" | "editorial" | "hero";
+  version: string;
+  display_name: string;
+  description: string;
+  requires_hero: boolean;
+};
+
+export type CatalogCoverAsset = {
+  asset_id: string;
+  mime_type: "image/png" | "image/jpeg" | "image/webp";
+  width: number;
+  height: number;
+  preview_url: string;
+};
+
+export type CatalogCoverInput = { enabled: false } | {
+  enabled: true;
+  cover_key: CatalogCoverLayout["key"];
+  cover_version: string;
+  title: string;
+  subtitle?: string;
+  edition_label?: string;
+  show_publisher_logo: boolean;
+  hero_asset_id?: string;
+};
+
 export type CatalogBuild = {
   id: string;
   status: "queued" | "running" | "succeeded" | "failed";
@@ -91,6 +118,15 @@ export type CatalogBuild = {
   palette_source?: "publisher" | "custom" | "legacy";
   primary_color?: string | null;
   accent_color?: string | null;
+  cover_enabled?: boolean;
+  cover_key?: CatalogCoverLayout["key"] | null;
+  cover_version?: string | null;
+  cover_display_label?: string;
+  cover_title?: string | null;
+  cover_subtitle?: string | null;
+  cover_edition_label?: string | null;
+  cover_show_publisher_logo?: boolean;
+  cover_hero_present?: boolean;
   created_at: string;
   error: string | null;
   can_retry: boolean;
@@ -352,6 +388,21 @@ export function fetchThemes(signal?: AbortSignal): Promise<CatalogTheme[]> {
   return getJson<CatalogTheme[]>("/api/catalog-builder/themes", signal);
 }
 
+export function fetchCoverLayouts(signal?: AbortSignal): Promise<CatalogCoverLayout[]> {
+  return getJson<CatalogCoverLayout[]>("/api/catalog-builder/cover-layouts", signal);
+}
+
+export async function uploadCatalogCoverAsset(image: File): Promise<CatalogCoverAsset> {
+  const body = new FormData();
+  body.append("image", image);
+  const response = await fetch(resolveApiUrl("/api/catalog-builder/cover-assets"), { method: "POST", body });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { detail?: string };
+    throw new ApiError(response.status, payload.detail || `Cover image upload failed (${response.status})`);
+  }
+  return response.json() as Promise<CatalogCoverAsset>;
+}
+
 export type CatalogBuildInput = {
   product_ids: string[];
   catalog_brand_profile_id: string;
@@ -361,6 +412,7 @@ export type CatalogBuildInput = {
   theme_version?: string;
   primary_color_override?: string;
   accent_color_override?: string;
+  cover?: CatalogCoverInput;
   currency: string;
   idempotency_key: string;
 };
