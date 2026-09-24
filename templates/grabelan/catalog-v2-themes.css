@@ -1,0 +1,65 @@
+/* Visual-only modifiers. Geometry and product-per-row rules remain in catalog-v1.css. */
+.theme-minimal .store-name, .theme-premium .store-name, .theme-organic .store-name, .theme-bold .store-name,
+.theme-minimal .product-brand, .theme-premium .product-brand, .theme-organic .product-brand, .theme-bold .product-brand { color: var(--text-secondary); }
+.theme-minimal {
+  --page-bg: #ffffff;
+  --surface: #ffffff;
+  --surface-subtle: #fbfbfa;
+  --text-primary: #242923;
+  --text-secondary: #535b54;
+  --border: #d8ddd8;
+  --radius: 1.5mm;
+}
+.theme-minimal .catalog-header { border-bottom-color: var(--brand-primary); }
+.theme-minimal .product-card { border-left: 0; border-right: 0; border-radius: 0; }
+.theme-minimal .product-image-frame { border-radius: 0; }
+.theme-minimal .category-title { border-left-width: 1px; }
+.theme-minimal .variant-price { color: var(--text-primary); }
+
+.theme-premium {
+  --page-bg: #fcfbf9;
+  --surface: #ffffff;
+  --surface-subtle: #f5f2ed;
+  --text-primary: #292522;
+  --text-secondary: #605b56;
+  --border: #d5cfc6;
+  --radius: 2mm;
+}
+.theme-premium h1,
+.theme-premium .category-title,
+.theme-premium .product-content h3 { font-family: Georgia, "Times New Roman", serif; }
+.theme-premium h1 { letter-spacing: 0.01em; }
+.theme-premium .catalog-header { border-bottom: 1.5px solid var(--brand-accent); }
+.theme-premium .category-title { border-left: 0; border-bottom: 1px solid var(--brand-accent); padding: 0 0 2mm; }
+.theme-premium .product-card { border-color: var(--border); box-shadow: 0 0.6mm 2mm #00000012; }
+.theme-premium .variant-price { color: var(--text-primary); border-bottom: 1px solid var(--brand-accent); padding-bottom: 0.4mm; }
+
+.theme-organic {
+  --page-bg: #fafbf8;
+  --surface: #ffffff;
+  --surface-subtle: #f0f4ed;
+  --text-primary: #253027;
+  --text-secondary: #526057;
+  --border: #d1ddd0;
+  --radius: 5mm;
+}
+.theme-organic .catalog-header { border-bottom: 2px solid var(--brand-primary); }
+.theme-organic .category-title { background: var(--brand-primary); color: var(--primary-contrast); border: 0; border-radius: 2mm; padding: 1.4mm 3mm; }
+.theme-organic .product-card { border-radius: var(--radius); }
+.theme-organic .product-image-frame { border-radius: var(--radius) var(--radius) 0 0; }
+.theme-organic .variant-price { background: var(--brand-accent); color: var(--accent-contrast); border-radius: 2mm; padding: 0.75mm 1.5mm; }
+
+.theme-bold {
+  --page-bg: #ffffff;
+  --surface: #ffffff;
+  --surface-subtle: #f1f2f0;
+  --text-primary: #171d1a;
+  --text-secondary: #3f4942;
+  --border: #aab5ac;
+  --radius: 1mm;
+}
+.theme-bold h1 { font-weight: 800; letter-spacing: -0.035em; }
+.theme-bold .catalog-header { border-bottom: 3px solid var(--brand-primary); }
+.theme-bold .category-title { background: var(--brand-primary); color: var(--primary-contrast); border: 0; padding: 1.2mm 3mm; text-transform: uppercase; letter-spacing: 0.04em; }
+.theme-bold .product-card { border-width: 1.5px; }
+.theme-bold .variant-price { background: var(--brand-accent); color: var(--accent-contrast); padding: 0.65mm 1.2mm; }

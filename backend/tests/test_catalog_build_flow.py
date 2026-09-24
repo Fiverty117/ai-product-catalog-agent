@@ -20,6 +20,7 @@ from app.db import (
     CatalogArtifact,
     CatalogBrandProfile,
     CatalogBuild,
+    CatalogRenderRun,
     Category,
     CatalogSnapshot,
     Job,
@@ -78,8 +79,10 @@ AS_OF = datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc)
 class FakeRenderer:
     def __init__(self, pdf_bytes: bytes):
         self.pdf_bytes = pdf_bytes
+        self.html = None
 
     def render(self, html, config):
+        self.html = html
         return CatalogPdfRenderResult(
             pdf_bytes=self.pdf_bytes,
             engine="chromium",
@@ -246,6 +249,61 @@ def _worker(factory, storage_root, catalogs_dir, pdf_bytes):
         ),
         accepted_job_types={"catalog.render.v2"},
     )
+
+
+def test_themed_build_freezes_palette_and_reuses_action_identity(build_store):
+    factory, client, storage_root, catalogs_dir = build_store
+    with factory() as session:
+        product, _, _, _, profile = _seed_ready(session, storage_root)
+        profile_id = profile.id
+    themes = client.get("/api/catalog-builder/themes")
+    assert themes.status_code == 200
+    assert [item["key"] for item in themes.json()] == ["minimal", "premium", "organic", "bold"]
+    request = {**_request(product, profile), "theme_key": "premium", "theme_version": "1", "primary_color_override": "#aabbcc"}
+    first = client.post("/api/catalog-builder/builds", json=request)
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert (body["theme_key"], body["theme_display_label"], body["palette_source"]) == ("premium", "Premium", "custom")
+    assert (body["primary_color"], body["accent_color"]) == ("#AABBCC", "#C89B3C")
+    assert client.post("/api/catalog-builder/builds", json=request).json()["id"] == body["id"]
+    changed = {**request, "theme_key": "organic"}
+    assert client.post("/api/catalog-builder/builds", json=changed).status_code == 409
+    changed["idempotency_key"] = "new-theme-action"
+    other = client.post("/api/catalog-builder/builds", json=changed)
+    assert other.status_code == 200 and other.json()["id"] != body["id"]
+    invalid = {**request, "theme_version": "2", "idempotency_key": "invalid-version"}
+    assert client.post("/api/catalog-builder/builds", json=invalid).status_code == 404
+    invalid = {**request, "primary_color_override": "red", "idempotency_key": "invalid-color"}
+    assert client.post("/api/catalog-builder/builds", json=invalid).status_code == 422
+    with factory() as session:
+        build = session.get(CatalogBuild, uuid.UUID(body["id"]))
+        assert build.job.job_type == "catalog.render.v3"
+        payload = build.job.payload
+        assert payload["theme_data"]["primary_color"] == "#AABBCC"
+        assert payload["theme_data"]["accent_color"] == "#C89B3C"
+        assert payload["theme_hash"] != session.get(CatalogBuild, uuid.UUID(other.json()["id"])).job.payload["theme_hash"]
+        session.get(CatalogBrandProfile, profile_id).primary_color = "#112233"
+        session.commit()
+    assert client.get(f"/api/catalog-builder/builds/{body['id']}").json()["primary_color"] == "#AABBCC"
+    with factory() as session:
+        job = session.get(CatalogBuild, uuid.UUID(body["id"])).job
+        job.status = JobStatus.FAILED
+        job.attempts = 1
+        session.commit()
+    retried = client.post(f"/api/catalog-builder/builds/{body['id']}/retry")
+    assert retried.status_code == 200 and retried.json()["primary_color"] == "#AABBCC"
+    renderer = FakeRenderer(_valid_pdf())
+    worker = JobWorker(factory, catalog_render_handlers(factory, renderer, storage_root=storage_root,
+        catalogs_dir=catalogs_dir, template_root=TEMPLATE_ROOT), accepted_job_types={"catalog.render.v3"})
+    worker.run_once()
+    assert renderer.html is not None and "theme-premium" in renderer.html and "#AABBCC" in renderer.html
+    result = client.get(f"/api/catalog-builder/builds/{body['id']}").json()
+    assert result["status"] == "succeeded" and result["artifact"]["page_count"] == 1
+    with factory() as session:
+        build = session.get(CatalogBuild, uuid.UUID(body["id"]))
+        run = session.scalar(select(CatalogRenderRun).where(CatalogRenderRun.job_id == build.job_id))
+        assert run.theme_hash == payload["theme_hash"] and run.theme_data["theme_key"] == "premium"
+        assert session.get(CatalogBrandProfile, profile_id).primary_color == "#112233"
 
 
 def test_create_is_authoritative_transactional_and_idempotent(build_store):

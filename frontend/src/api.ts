@@ -66,6 +66,13 @@ export type CatalogLayout = {
   orientation: "portrait";
 };
 
+export type CatalogTheme = {
+  key: "minimal" | "premium" | "organic" | "bold";
+  version: string;
+  display_name: string;
+  description: string;
+};
+
 export type CatalogBuild = {
   id: string;
   status: "queued" | "running" | "succeeded" | "failed";
@@ -78,6 +85,12 @@ export type CatalogBuild = {
   layout_key: CatalogLayout["key"];
   layout_version: string;
   layout_display_label: string;
+  theme_key?: CatalogTheme["key"] | null;
+  theme_version?: string | null;
+  theme_display_label?: string;
+  palette_source?: "publisher" | "custom" | "legacy";
+  primary_color?: string | null;
+  accent_color?: string | null;
   created_at: string;
   error: string | null;
   can_retry: boolean;
@@ -335,11 +348,19 @@ export function fetchLayouts(signal?: AbortSignal): Promise<CatalogLayout[]> {
   return getJson<CatalogLayout[]>("/api/catalog-builder/layouts", signal);
 }
 
+export function fetchThemes(signal?: AbortSignal): Promise<CatalogTheme[]> {
+  return getJson<CatalogTheme[]>("/api/catalog-builder/themes", signal);
+}
+
 export type CatalogBuildInput = {
   product_ids: string[];
   catalog_brand_profile_id: string;
   layout_key: CatalogLayout["key"];
   layout_version: string;
+  theme_key?: CatalogTheme["key"];
+  theme_version?: string;
+  primary_color_override?: string;
+  accent_color_override?: string;
   currency: string;
   idempotency_key: string;
 };

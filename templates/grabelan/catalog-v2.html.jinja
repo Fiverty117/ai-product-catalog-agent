@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="{{ locale }}">
+  <head>
+    <meta charset="utf-8">
+    <title>{{ branding.display_name }} - {{ title }}</title>
+    <style>
+      @page { size: {{ page_size }} {{ orientation }}; margin: 12mm; }
+      {{ stylesheet | safe }}
+    </style>
+  </head>
+  <body class="layout {{ layout.css_class }} {{ theme.css_class }}" style="--brand-primary: {{ theme.primary_color }}; --brand-accent: {{ theme.accent_color }}; --primary-contrast: {{ theme.primary_contrast_color }}; --accent-contrast: {{ theme.accent_contrast_color }};">
+    <header class="catalog-header">
+      <div>
+        {% if branding.logo_data_uri %}
+        <img class="publisher-logo" src="{{ branding.logo_data_uri }}" alt="{{ branding.display_name }}">
+        {% else %}
+        <p class="store-name">{{ branding.display_name }}</p>
+        {% endif %}
+        <h1>{{ title }}</h1>
+        {% if branding.contact_text or branding.social_handle %}
+        <p class="publisher-details">{% if branding.contact_text %}{{ branding.contact_text }}{% endif %}{% if branding.contact_text and branding.social_handle %} · {% endif %}{% if branding.social_handle %}{{ branding.social_handle }}{% endif %}</p>
+        {% endif %}
+      </div>
+      <dl class="catalog-meta">
+        <div><dt>Fecha</dt><dd>{{ as_of_label }}</dd></div>
+        <div><dt>Moneda</dt><dd>{{ currency }}</dd></div>
+      </dl>
+    </header>
+
+    <main style="--products-per-row: {{ layout.products_per_row }}">
+      {% for section in sections %}
+      <section class="category-section">
+        <h2 class="category-title">{{ section.category_name }}</h2>
+        <div class="product-rows">
+          {% for product_row in section.products | batch(layout.products_per_row) %}
+          <div class="product-row">
+            {% for product in product_row %}
+            <article class="product-card">
+              <div class="product-image-frame">
+                <img src="{{ product.image_data_uri }}" alt="{{ product.product_name }}">
+              </div>
+              <div class="product-content">
+                <p class="product-brand">{{ product.brand_name }}</p>
+                <h3>{{ product.product_name }}</h3>
+                {% if product.short_description and layout.key != "compact" %}
+                <p class="product-description">{{ product.short_description }}</p>
+                {% endif %}
+                <ul class="variant-list">
+                  {% for variant in product.variants %}
+                  <li class="variant-row{% if not variant.label %} variant-row--price-only{% endif %}">
+                    {% if variant.label %}<span class="variant-label">{{ variant.label }}</span>{% endif %}
+                    <strong class="variant-price">{{ variant.price_display }}</strong>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    </main>
+  </body>
+</html>

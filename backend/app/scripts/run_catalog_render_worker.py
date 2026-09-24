@@ -7,14 +7,14 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.session import DATABASE_URL, create_sqlite_engine
 from app.rendering.catalog_pdf import ChromiumCatalogPdfRenderer
-from app.services.catalog_rendering import CATALOG_RENDER_JOB_TYPE_V2
+from app.services.catalog_rendering import CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3
 from app.workers.catalog_render_handler import catalog_render_handlers
 from app.workers.job_worker import JobWorker
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the local catalog.render.v2 durable-job worker."
+        description="Run the local catalog.render.v2/v3 durable-job worker."
     )
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.add_argument("--stale-after-seconds", type=int, default=900)
@@ -34,7 +34,7 @@ def main() -> None:
     worker = JobWorker(
         session_factory,
         catalog_render_handlers(session_factory, ChromiumCatalogPdfRenderer()),
-        accepted_job_types={CATALOG_RENDER_JOB_TYPE_V2},
+        accepted_job_types={CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3},
     )
     try:
         worker.recover_stale_jobs(timedelta(seconds=args.stale_after_seconds))

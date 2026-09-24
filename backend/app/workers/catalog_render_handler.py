@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db.models import CatalogRenderRun
-from app.domain.schemas import CatalogRenderJobPayload, CatalogRenderJobPayloadV2, CatalogSnapshotData
+from app.domain.schemas import CatalogRenderJobPayload, CatalogRenderJobPayloadV2, CatalogRenderJobPayloadV3, CatalogSnapshotData
 from app.rendering.catalog_pdf import (
     CatalogPdfRenderer,
     RetryableCatalogRendererError,
@@ -15,6 +15,7 @@ from app.services.catalog_rendering import (
     CATALOG_RENDERER_VERSION,
     CATALOG_RENDER_JOB_TYPE,
     CATALOG_RENDER_JOB_TYPE_V2,
+    CATALOG_RENDER_JOB_TYPE_V3,
     DEFAULT_CATALOGS_DIR,
     DEFAULT_STORAGE_ROOT,
     DEFAULT_TEMPLATE_ROOT,
@@ -32,6 +33,7 @@ from app.services.catalog_rendering import (
     store_catalog_pdf,
 )
 from app.services.catalog_branding import CatalogBrandingError, hash_resolved_catalog_branding
+from app.rendering.catalog_themes import UnknownCatalogThemeError, hash_resolved_catalog_theme, resolve_catalog_theme_definition
 from app.services.jobs import PermanentJobError
 from app.workers.job_worker import ClaimedJob
 
@@ -70,6 +72,7 @@ class CatalogRenderJobHandler:
                 storage_root=self._storage_root,
                 store_name=template.display_name,
                 branding=payload.branding_data if isinstance(payload, CatalogRenderJobPayloadV2) else None,
+                theme=payload.theme_data if isinstance(payload, CatalogRenderJobPayloadV3) else None,
             )
             if hash_catalog_template(template) != payload.template_hash.lower():
                 raise InvalidCatalogRenderJobError(
@@ -105,12 +108,13 @@ class CatalogRenderJobHandler:
             raise error from None
 
     def _validate_payload(self, claimed: ClaimedJob):
-        if claimed.job_type not in (CATALOG_RENDER_JOB_TYPE, CATALOG_RENDER_JOB_TYPE_V2):
+        if claimed.job_type not in (CATALOG_RENDER_JOB_TYPE, CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3):
             raise PermanentCatalogRenderError(
                 "handler requires a supported catalog render job type"
             )
         try:
-            payload = (CatalogRenderJobPayloadV2 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V2 else CatalogRenderJobPayload).model_validate(claimed.payload)
+            payload_type = CatalogRenderJobPayloadV3 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V3 else CatalogRenderJobPayloadV2 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V2 else CatalogRenderJobPayload
+            payload = payload_type.model_validate(claimed.payload)
             normalized_config = normalize_catalog_render_config(payload.config)
             template = resolve_catalog_template(
                 payload.template_key,
@@ -131,12 +135,19 @@ class CatalogRenderJobHandler:
             )
         if isinstance(payload, CatalogRenderJobPayloadV2) and hash_resolved_catalog_branding(payload.branding_data) != payload.branding_hash.lower():
             raise PermanentCatalogRenderError("frozen branding payload hash mismatch")
+        if isinstance(payload, CatalogRenderJobPayloadV3):
+            try:
+                definition = resolve_catalog_theme_definition(payload.theme_data.theme_key, payload.theme_data.theme_version)
+            except UnknownCatalogThemeError:
+                raise PermanentCatalogRenderError("frozen catalog theme is no longer supported") from None
+            if payload.theme_data.css_class != definition.css_class or hash_resolved_catalog_theme(payload.theme_data) != payload.theme_hash.lower():
+                raise PermanentCatalogRenderError("frozen theme payload hash mismatch")
         return payload, template
 
     def _prepare_attempt(
         self,
         claimed: ClaimedJob,
-        payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2,
+        payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2 | CatalogRenderJobPayloadV3,
     ) -> tuple[uuid.UUID, CatalogSnapshotData]:
         with self._session_factory() as session:
             try:
@@ -163,7 +174,7 @@ def catalog_render_handlers(
     **handler_options,
 ) -> dict[str, CatalogRenderJobHandler]:
     handler = CatalogRenderJobHandler(session_factory, renderer, **handler_options)
-    return {CATALOG_RENDER_JOB_TYPE: handler, CATALOG_RENDER_JOB_TYPE_V2: handler}
+    return {CATALOG_RENDER_JOB_TYPE: handler, CATALOG_RENDER_JOB_TYPE_V2: handler, CATALOG_RENDER_JOB_TYPE_V3: handler}
 
 
 def _safe_render_error(error: Exception) -> Exception:

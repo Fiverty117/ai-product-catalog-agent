@@ -29,6 +29,7 @@ from app.domain.schemas import (
     CatalogRenderConfig,
     CatalogRenderJobPayload,
     CatalogRenderJobPayloadV2,
+    CatalogRenderJobPayloadV3,
     CatalogRenderLayoutView,
     CatalogRenderProductView,
     CatalogRenderSectionView,
@@ -38,12 +39,14 @@ from app.domain.schemas import (
     CatalogVariantSnapshot,
     FrozenCatalogAsset,
     ResolvedCatalogBranding,
+    ResolvedCatalogTheme,
 )
 from app.rendering.catalog_layouts import (
     CatalogLayoutDefinition,
     UnknownCatalogLayoutError,
     resolve_catalog_layout,
 )
+from app.rendering.catalog_themes import hash_resolved_catalog_theme, resolve_catalog_theme, resolve_catalog_theme_definition
 from app.services.catalog_branding import (
     get_active_catalog_brand_profile,
     hash_resolved_catalog_branding,
@@ -60,6 +63,7 @@ from app.services.photo_intake import PhotoIntakeError, inspect_supported_image
 
 CATALOG_RENDER_JOB_TYPE = "catalog.render.v1"
 CATALOG_RENDER_JOB_TYPE_V2 = "catalog.render.v2"
+CATALOG_RENDER_JOB_TYPE_V3 = "catalog.render.v3"
 CATALOG_RENDERER_VERSION = "catalog-chromium-v1"
 CATALOG_RENDERER_ENGINE = "chromium"
 PDF_MEDIA_TYPE = "application/pdf"
@@ -113,6 +117,7 @@ class CatalogTemplate:
     root: Path
     html_path: Path
     css_path: Path
+    theme_css_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -128,19 +133,19 @@ def resolve_catalog_template(
     *,
     template_root: Path = DEFAULT_TEMPLATE_ROOT,
 ) -> CatalogTemplate:
-    if template_key != "grabelan-catalog-v1":
+    if template_key not in ("grabelan-catalog-v1", "grabelan-catalog-v2"):
         raise UnknownCatalogTemplateError(
             f"unsupported catalog template: {template_key}"
         )
+    themed = template_key == "grabelan-catalog-v2"
     template = CatalogTemplate(
-        key="grabelan-catalog-v1",
-        version="1.0",
-        display_name="Grabelan",
+        key=template_key, version="2.0" if themed else "1.0", display_name="Grabelan",
         root=template_root.resolve(),
-        html_path=(template_root / "catalog-v1.html.jinja").resolve(),
+        html_path=(template_root / ("catalog-v2.html.jinja" if themed else "catalog-v1.html.jinja")).resolve(),
         css_path=(template_root / "catalog-v1.css").resolve(),
+        theme_css_path=(template_root / "catalog-v2-themes.css").resolve() if themed else None,
     )
-    for path in (template.html_path, template.css_path):
+    for path in (template.html_path, template.css_path, *([template.theme_css_path] if template.theme_css_path else [])):
         if not path.is_file() or not path.is_relative_to(template.root):
             raise InvalidCatalogTemplateError(
                 f"catalog template file is missing: {path.name}"
@@ -150,6 +155,8 @@ def resolve_catalog_template(
 
 def hash_catalog_template(template: CatalogTemplate) -> str:
     files = [template.html_path, template.css_path]
+    if template.theme_css_path is not None:
+        files.append(template.theme_css_path)
     static_root = template.root / "static"
     if static_root.is_dir():
         files.extend(path for path in static_root.rglob("*") if path.is_file())
@@ -218,7 +225,7 @@ def resolve_catalog_render_layout(
 
 
 def build_catalog_render_idempotency_key(
-    payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2,
+    payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2 | CatalogRenderJobPayloadV3,
     *,
     job_type: str = CATALOG_RENDER_JOB_TYPE,
 ) -> str:
@@ -280,6 +287,49 @@ def enqueue_catalog_render_v2(
     )
 
 
+def enqueue_catalog_render_v3(
+    session: Session, *, catalog_snapshot_id: uuid.UUID, brand_profile_id: uuid.UUID,
+    theme_key: str, theme_version: str, primary_color_override: str | None = None,
+    accent_color_override: str | None = None,
+    config: CatalogRenderConfig | Mapping[str, Any] | None = None,
+    template_root: Path = DEFAULT_TEMPLATE_ROOT, storage_root: Path = DEFAULT_STORAGE_ROOT,
+    renderer_version: str = CATALOG_RENDERER_VERSION, max_attempts: int = 3,
+) -> Job:
+    normalized_config = normalize_catalog_render_config(config or {"template_key": "grabelan-catalog-v2"})
+    if normalized_config.template_key != "grabelan-catalog-v2":
+        raise InvalidCatalogRenderConfigError("themed catalog renders require the v2 template")
+    layout = resolve_catalog_render_layout(normalized_config)
+    template = resolve_catalog_template(normalized_config.template_key, template_root=template_root)
+    snapshot = session.get(CatalogSnapshot, catalog_snapshot_id)
+    if snapshot is None:
+        raise InvalidCatalogRenderJobError(f"CatalogSnapshot not found: {catalog_snapshot_id}")
+    read_catalog_snapshot_data(session, snapshot.id)
+    profile = get_active_catalog_brand_profile(session, profile_id=brand_profile_id)
+    branding = resolve_catalog_branding(profile, storage_root=storage_root)
+    theme = resolve_catalog_theme(theme_key, theme_version, branding,
+        primary_color_override=primary_color_override, accent_color_override=accent_color_override)
+    version = renderer_version.strip()
+    if not version:
+        raise InvalidCatalogRenderJobError("renderer_version is required")
+    payload = CatalogRenderJobPayloadV3(
+        catalog_snapshot_id=snapshot.id, snapshot_content_hash=snapshot.content_hash.lower(),
+        snapshot_schema_version=snapshot.schema_version,
+        template_key=template.key, template_version=template.version,
+        template_hash=hash_catalog_template(template), renderer_version=version,
+        config=normalized_config, config_hash=hash_catalog_render_config(normalized_config),
+        catalog_brand_profile_id=profile.id, branding_schema_version=branding.schema_version,
+        branding_hash=hash_resolved_catalog_branding(branding), branding_data=branding,
+        layout_key=layout.key, layout_version=layout.version,
+        theme_schema_version=theme.schema_version, theme_hash=hash_resolved_catalog_theme(theme), theme_data=theme,
+    )
+    return enqueue_job(
+        session, job_type=CATALOG_RENDER_JOB_TYPE_V3,
+        payload=payload.model_dump(mode="json"),
+        idempotency_key=build_catalog_render_idempotency_key(payload, job_type=CATALOG_RENDER_JOB_TYPE_V3),
+        max_attempts=max_attempts,
+    )
+
+
 def enqueue_catalog_render(
     session: Session,
     *,
@@ -333,7 +383,7 @@ def enqueue_catalog_render(
 def create_running_catalog_render_run(
     session: Session,
     *,
-    payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2,
+    payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2 | CatalogRenderJobPayloadV3,
     job_id: uuid.UUID | None = None,
     started_at: datetime | None = None,
 ) -> tuple[CatalogRenderRun, CatalogSnapshotData]:
@@ -358,7 +408,7 @@ def create_running_catalog_render_run(
     job = None
     if job_id is not None:
         job = session.get(Job, job_id)
-        expected_type = CATALOG_RENDER_JOB_TYPE_V2 if isinstance(payload, CatalogRenderJobPayloadV2) else CATALOG_RENDER_JOB_TYPE
+        expected_type = CATALOG_RENDER_JOB_TYPE_V3 if isinstance(payload, CatalogRenderJobPayloadV3) else CATALOG_RENDER_JOB_TYPE_V2 if isinstance(payload, CatalogRenderJobPayloadV2) else CATALOG_RENDER_JOB_TYPE
         if job is None or job.job_type != expected_type:
             raise InvalidCatalogRenderJobError(
                 f"job must exist with type {expected_type}"
@@ -371,6 +421,12 @@ def create_running_catalog_render_run(
             raise InvalidCatalogRenderJobError(
                 "catalog render Job layout lineage is no longer supported"
             )
+    if isinstance(payload, CatalogRenderJobPayloadV3):
+        theme = payload.theme_data
+        definition = resolve_catalog_theme_definition(theme.theme_key, theme.theme_version)
+        if (theme.css_class != definition.css_class
+            or hash_resolved_catalog_theme(theme) != payload.theme_hash.lower()):
+            raise InvalidCatalogRenderJobError("frozen theme payload hash or registry lineage mismatch")
     run = CatalogRenderRun(
         catalog_snapshot=snapshot,
         job=job,
@@ -388,6 +444,9 @@ def create_running_catalog_render_run(
         branding_schema_version=(payload.branding_schema_version if isinstance(payload, CatalogRenderJobPayloadV2) else None),
         branding_hash=(payload.branding_hash.lower() if isinstance(payload, CatalogRenderJobPayloadV2) else None),
         branding_data=(payload.branding_data.model_dump(mode="json") if isinstance(payload, CatalogRenderJobPayloadV2) else None),
+        theme_schema_version=(payload.theme_schema_version if isinstance(payload, CatalogRenderJobPayloadV3) else None),
+        theme_hash=(payload.theme_hash.lower() if isinstance(payload, CatalogRenderJobPayloadV3) else None),
+        theme_data=(payload.theme_data.model_dump(mode="json") if isinstance(payload, CatalogRenderJobPayloadV3) else None),
         status=ExtractionRunStatus.RUNNING,
         started_at=started_at or utc_now(),
     )
@@ -457,6 +516,7 @@ def build_catalog_render_view_model(
     storage_root: Path = DEFAULT_STORAGE_ROOT,
     store_name: str = "Grabelan",
     branding: ResolvedCatalogBranding | None = None,
+    theme: ResolvedCatalogTheme | None = None,
 ) -> CatalogRenderViewModel:
     layout = resolve_catalog_render_layout(config, require_registered_geometry=False)
     babel_locale = config.locale.replace("-", "_")
@@ -506,6 +566,7 @@ def build_catalog_render_view_model(
         orientation=config.orientation,
         store_name=branding.display_name if branding else store_name,
         branding=build_catalog_branding_view(branding, storage_root=storage_root) if branding else None,
+        theme=theme,
         layout=CatalogRenderLayoutView(
             key=layout.key,
             version=layout.version,
@@ -611,6 +672,8 @@ def render_catalog_html(
     try:
         source = template.html_path.read_text(encoding="utf-8")
         stylesheet = template.css_path.read_text(encoding="utf-8")
+        if template.theme_css_path is not None:
+            stylesheet += "\n" + template.theme_css_path.read_text(encoding="utf-8")
     except OSError:
         raise InvalidCatalogTemplateError(
             "catalog template could not be read"

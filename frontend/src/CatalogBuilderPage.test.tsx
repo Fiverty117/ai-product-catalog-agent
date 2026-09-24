@@ -6,6 +6,7 @@ import type {
   BrandProfile,
   CatalogBuild,
   CatalogLayout,
+  CatalogTheme,
   ProductCopyEditorialSummary,
   ProductSummary,
 } from "./api";
@@ -14,6 +15,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchProducts: vi.fn(),
   fetchBrandProfiles: vi.fn(),
   fetchLayouts: vi.fn(),
+  fetchThemes: vi.fn(),
   fetchProductCopyEditorial: vi.fn(),
   generateProductCopy: vi.fn(),
   retryProductCopyGeneration: vi.fn(),
@@ -41,6 +43,12 @@ const layouts: CatalogLayout[] = [
   { key: "classic", version: "1", display_label: "Classic", products_per_row: 2, page_size: "A4", orientation: "portrait" },
   { key: "dense", version: "1", display_label: "Dense", products_per_row: 3, page_size: "A4", orientation: "portrait" },
   { key: "compact", version: "1", display_label: "Compact", products_per_row: 4, page_size: "A4", orientation: "portrait" },
+];
+const themes: CatalogTheme[] = [
+  { key: "minimal", version: "1", display_name: "Minimal", description: "Clean and restrained" },
+  { key: "premium", version: "1", display_name: "Premium", description: "Editorial and refined" },
+  { key: "organic", version: "1", display_name: "Organic", description: "Soft and natural" },
+  { key: "bold", version: "1", display_name: "Bold", description: "High-contrast retail" },
 ];
 
 const profiles: BrandProfile[] = [
@@ -138,6 +146,7 @@ beforeEach(() => {
   }));
   apiMocks.fetchBrandProfiles.mockResolvedValue(profiles);
   apiMocks.fetchLayouts.mockResolvedValue(layouts);
+  apiMocks.fetchThemes.mockResolvedValue(themes);
   apiMocks.fetchProducts.mockImplementation((search: string) => Promise.resolve({
     currency: "PYG",
     as_of: "2026-09-17T12:00:00Z",
@@ -204,6 +213,57 @@ describe("CatalogBuilderPage", () => {
     expect(within(returnedCard).getByRole("checkbox")).toBeChecked();
     expect(screen.getByRole("button", { name: "Create catalog" })).toBeEnabled();
   }, 15000);
+
+  it("loads themes, freezes selected theme and custom palette in the create payload and result", async () => {
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("queued", {
+      theme_key: "premium", theme_version: "1", theme_display_label: "Premium",
+      palette_source: "custom", primary_color: "#123456", accent_color: "#AA0000",
+    }));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    expect(apiMocks.fetchThemes).toHaveBeenCalled();
+    expect(screen.getByRole("radio", { name: /Minimal/ })).toBeChecked();
+    expect(screen.getByRole("textbox", { name: "Primary hex" })).toHaveValue("#183D2F");
+    expect(screen.getByRole("textbox", { name: "Accent hex" })).toHaveValue("#C89B3C");
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("radio", { name: /Premium/ }));
+    await user.clear(screen.getByRole("textbox", { name: "Primary hex" }));
+    await user.type(screen.getByRole("textbox", { name: "Primary hex" }), "invalid");
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    expect(screen.getByText("Use #RRGGBB for both palette colors.")).toBeVisible();
+    await user.clear(screen.getByRole("textbox", { name: "Primary hex" }));
+    await user.type(screen.getByRole("textbox", { name: "Primary hex" }), "#123456");
+    await user.clear(screen.getByRole("textbox", { name: "Accent hex" }));
+    await user.type(screen.getByRole("textbox", { name: "Accent hex" }), "#aa0000");
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(apiMocks.createCatalogBuild).toHaveBeenCalledWith(expect.objectContaining({
+      theme_key: "premium", theme_version: "1",
+      primary_color_override: "#123456", accent_color_override: "#AA0000",
+    }));
+    expect(await screen.findByRole("heading", { name: "Catalog queued" })).toBeVisible();
+    await user.click(screen.getByRole("radio", { name: /Bold/ }));
+    const summary = screen.getByRole("complementary", { name: "Catalog summary" });
+    expect(within(summary).getByText("Theme").nextElementSibling).toHaveTextContent("Bold");
+    expect(screen.getByText(/1 Product · Grabelan Natural Market · Classic · Premium · Custom palette/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Reset to publisher colors" }));
+    expect(screen.getByRole("textbox", { name: "Primary hex" })).toHaveValue("#183D2F");
+    expect(within(summary).getByText("Palette").nextElementSibling).toHaveTextContent("Publisher colors");
+  }, 20000);
+
+  it("sends no overrides for publisher colors and reads historical builds as Legacy", async () => {
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("succeeded"));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0]).toEqual(expect.objectContaining({ theme_key: "minimal", theme_version: "1" }));
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0]).not.toHaveProperty("primary_color_override");
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0]).not.toHaveProperty("accent_color_override");
+    expect(await screen.findByText(/Legacy · Legacy palette/)).toBeVisible();
+  });
 
   it("creates once with stable choices, shows creating/queued state, and preserves Builder controls", async () => {
     const user = userEvent.setup();

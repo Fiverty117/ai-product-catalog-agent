@@ -6,12 +6,14 @@ import {
   CatalogBuildInput,
   CatalogBuildReadinessConflict,
   CatalogLayout,
+  CatalogTheme,
   ProductSummary,
   ApiError,
   createCatalogBuild,
   fetchBrandProfiles,
   fetchCatalogBuild,
   fetchLayouts,
+  fetchThemes,
   fetchProducts,
   retryCatalogBuild,
   resolveApiUrl,
@@ -21,6 +23,7 @@ import { ProductEditorialDrawer } from "./editorial/ProductEditorialDrawer";
 type ReadinessFilter = "all" | "ready" | "not_ready";
 const BUILD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BUILD_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+const VALID_COLOR = /^#[0-9A-Fa-f]{6}$/;
 
 function rememberBuildId(buildId: string): void {
   const url = new URL(window.location.href);
@@ -157,12 +160,16 @@ export function CatalogBuilderPage() {
   const [products, setProducts] = useState<ProductSummary[] | null>(null);
   const [profiles, setProfiles] = useState<BrandProfile[] | null>(null);
   const [layouts, setLayouts] = useState<CatalogLayout[] | null>(null);
+  const [themes, setThemes] = useState<CatalogTheme[] | null>(null);
   const [search, setSearch] = useState("");
   const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Record<string, ProductSummary>>({});
   const [brandProfileId, setBrandProfileId] = useState("");
   const [layoutKey, setLayoutKey] = useState<CatalogLayout["key"]>("classic");
+  const [themeKey, setThemeKey] = useState<CatalogTheme["key"]>("minimal");
+  const [primaryOverride, setPrimaryOverride] = useState<string | null>(null);
+  const [accentOverride, setAccentOverride] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -200,19 +207,22 @@ export function CatalogBuilderPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all([fetchBrandProfiles(controller.signal), fetchLayouts(controller.signal)])
-      .then(([nextProfiles, nextLayouts]) => {
+    Promise.all([fetchBrandProfiles(controller.signal), fetchLayouts(controller.signal), fetchThemes(controller.signal)])
+      .then(([nextProfiles, nextLayouts, nextThemes]) => {
         setProfiles(nextProfiles);
         setLayouts(nextLayouts);
+        setThemes(nextThemes);
         setBrandProfileId((current) => current || nextProfiles[0]?.id || "");
         if (!nextLayouts.some((layout) => layout.key === "classic") && nextLayouts[0]) {
           setLayoutKey(nextLayouts[0].key);
         }
+        if (!nextThemes.some((theme) => theme.key === "minimal") && nextThemes[0]) setThemeKey(nextThemes[0].key);
       })
       .catch((caught: unknown) => {
         if ((caught as Error).name !== "AbortError") {
           setProfiles([]);
           setLayouts([]);
+          setThemes([]);
           setError("Catalog configuration could not be loaded.");
         }
       });
@@ -278,6 +288,11 @@ export function CatalogBuilderPage() {
 
   const selectedProfile = profiles?.find((profile) => profile.id === brandProfileId);
   const selectedLayout = layouts?.find((layout) => layout.key === layoutKey);
+  const selectedTheme = themes?.find((theme) => theme.key === themeKey);
+  const customPalette = primaryOverride !== null || accentOverride !== null;
+  const primaryColor = primaryOverride ?? selectedProfile?.primary_color ?? "#000000";
+  const accentColor = accentOverride ?? selectedProfile?.accent_color ?? "#000000";
+  const paletteValid = VALID_COLOR.test(primaryColor) && VALID_COLOR.test(accentColor);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allSelectedReady = selectedIds.every((id) => selectedProducts[id]?.readiness.ready);
   const readyCount = products?.filter((product) => product.readiness.ready).length ?? 0;
@@ -311,7 +326,7 @@ export function CatalogBuilderPage() {
     );
   }, []);
 
-  const initialLoading = products === null || profiles === null || layouts === null;
+  const initialLoading = products === null || profiles === null || layouts === null || themes === null;
 
   const applyReadinessConflict = (conflict: CatalogBuildReadinessConflict) => {
     setSelectedProducts((current) => {
@@ -343,7 +358,7 @@ export function CatalogBuilderPage() {
   const handleCreate = async () => {
     if (
       submittingRef.current || selectedIds.length === 0 ||
-      !brandProfileId || !selectedLayout
+      !brandProfileId || !selectedLayout || !selectedTheme || !paletteValid
     ) return;
     submittingRef.current = true;
     setIsCreating(true);
@@ -353,6 +368,10 @@ export function CatalogBuilderPage() {
       catalog_brand_profile_id: brandProfileId,
       layout_key: selectedLayout.key,
       layout_version: selectedLayout.version,
+      theme_key: selectedTheme.key,
+      theme_version: selectedTheme.version,
+      ...(primaryOverride !== null ? { primary_color_override: primaryOverride.toUpperCase() } : {}),
+      ...(accentOverride !== null ? { accent_color_override: accentOverride.toUpperCase() } : {}),
       currency: "PYG",
     };
     const pending = pendingCreateRef.current;
@@ -361,6 +380,10 @@ export function CatalogBuilderPage() {
       catalog_brand_profile_id: pending.catalog_brand_profile_id,
       layout_key: pending.layout_key,
       layout_version: pending.layout_version,
+      theme_key: pending.theme_key,
+      theme_version: pending.theme_version,
+      primary_color_override: pending.primary_color_override,
+      accent_color_override: pending.accent_color_override,
       currency: pending.currency,
     }) === JSON.stringify(choices)
       ? pending
@@ -407,7 +430,7 @@ export function CatalogBuilderPage() {
     }
   };
 
-  const canCreate = selectedIds.length > 0 && Boolean(brandProfileId && selectedLayout);
+  const canCreate = selectedIds.length > 0 && Boolean(brandProfileId && selectedLayout && selectedTheme && paletteValid);
 
   return (
     <main className="builder-shell">
@@ -420,7 +443,7 @@ export function CatalogBuilderPage() {
       <section className="configuration-bar" aria-labelledby="configuration-title">
         <div>
           <p className="section-kicker" id="configuration-title">Configuration</p>
-          <p className="configuration-help">Publisher and layout are sourced from the catalog API.</p>
+          <p className="configuration-help">Publisher, layout and theme are sourced from the catalog API.</p>
         </div>
         <label>
           Catalog brand
@@ -449,6 +472,32 @@ export function CatalogBuilderPage() {
             ))}
           </select>
         </label>
+        <div className="theme-control" role="group" aria-label="Catalog theme">
+          <span>Theme</span>
+          <div className="theme-option-grid">
+            {themes?.map((theme) => <label className={`theme-option theme-preview-${theme.key}`} key={`${theme.key}-${theme.version}`}>
+              <input type="radio" name="catalog-theme" value={theme.key} checked={themeKey === theme.key} onChange={() => setThemeKey(theme.key)} />
+              <span className="theme-swatch" aria-hidden="true" />
+              <strong>{theme.display_name}</strong><small>{theme.description}</small>
+            </label>)}
+          </div>
+        </div>
+        <div className="palette-control" role="group" aria-label="Catalog palette">
+          <strong>Palette</strong>
+          <p>{customPalette ? "Custom palette" : `Using ${selectedProfile?.display_name ?? "publisher"} colors`}</p>
+          <div className="palette-fields">
+            <label>Primary
+              <input aria-label="Primary color picker" type="color" value={VALID_COLOR.test(primaryColor) ? primaryColor : selectedProfile?.primary_color ?? "#000000"} onChange={(event) => setPrimaryOverride(event.target.value.toUpperCase())} />
+              <input aria-label="Primary hex" type="text" value={primaryColor} maxLength={7} onChange={(event) => setPrimaryOverride(event.target.value)} />
+            </label>
+            <label>Accent
+              <input aria-label="Accent color picker" type="color" value={VALID_COLOR.test(accentColor) ? accentColor : selectedProfile?.accent_color ?? "#000000"} onChange={(event) => setAccentOverride(event.target.value.toUpperCase())} />
+              <input aria-label="Accent hex" type="text" value={accentColor} maxLength={7} onChange={(event) => setAccentOverride(event.target.value)} />
+            </label>
+          </div>
+          {!paletteValid && <p className="field-error" role="alert">Use #RRGGBB for both palette colors.</p>}
+          {customPalette && <button type="button" onClick={() => { setPrimaryOverride(null); setAccentOverride(null); }}>Reset to publisher colors</button>}
+        </div>
       </section>
 
       {error && <div className="notice notice-error" role="alert">{error}</div>}
@@ -525,6 +574,8 @@ export function CatalogBuilderPage() {
             <div><dt>Products selected</dt><dd>{selectedIds.length}</dd></div>
             <div><dt>Brand</dt><dd>{selectedProfile?.display_name ?? "Not selected"}</dd></div>
             <div><dt>Layout</dt><dd>{selectedLayout?.display_label ?? "Not available"}</dd></div>
+            <div><dt>Theme</dt><dd>{selectedTheme?.display_name ?? "Not available"}</dd></div>
+            <div><dt>Palette</dt><dd>{customPalette ? "Custom" : "Publisher colors"}</dd></div>
             <div><dt>Columns</dt><dd>{selectedLayout?.products_per_row ?? "—"}</dd></div>
             <div><dt>Page</dt><dd>{selectedLayout ? `${selectedLayout.page_size} · ${selectedLayout.orientation}` : "—"}</dd></div>
             <div><dt>All selected Products ready</dt><dd>{selectedIds.length > 0 && allSelectedReady ? "Yes" : "—"}</dd></div>
@@ -553,6 +604,8 @@ export function CatalogBuilderPage() {
                 {build.product_count} {build.product_count === 1 ? "Product" : "Products"}
                 {" · "}{build.catalog_brand_display_name}
                 {" · "}{build.layout_display_label}
+                {" · "}{build.theme_display_label ?? "Legacy"}
+                {" · "}{build.palette_source === "custom" ? "Custom palette" : build.palette_source === "publisher" ? "Publisher colors" : "Legacy palette"}
                 {build.artifact ? ` · ${build.artifact.page_count} ${build.artifact.page_count === 1 ? "page" : "pages"}` : ""}
               </p>
               {(build.status === "queued" || build.status === "running") && (

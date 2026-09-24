@@ -10,6 +10,7 @@ from app.db.session import get_db
 from app.domain.schemas import (
     CatalogBuilderBrandProfileSummary,
     CatalogBuilderLayoutSummary,
+    CatalogBuilderThemeSummary,
     CatalogBuilderProductList,
     CatalogBuildCreate,
     CatalogBuildRead,
@@ -43,6 +44,7 @@ from app.services.catalog_builder import (
     resolve_catalog_builder_product_image,
 )
 from app.rendering.catalog_layouts import UnknownCatalogLayoutError
+from app.rendering.catalog_themes import InvalidCatalogPaletteError, UnknownCatalogThemeError, catalog_theme_definitions
 from app.services.catalog_readiness import UnknownCatalogReadinessProductError
 from app.services.catalog_snapshots import (
     CatalogSnapshotError,
@@ -83,6 +85,14 @@ def list_layouts() -> list[CatalogBuilderLayoutSummary]:
     return list_catalog_builder_layouts()
 
 
+@router.get("/themes", response_model=list[CatalogBuilderThemeSummary])
+def list_themes() -> list[CatalogBuilderThemeSummary]:
+    return [CatalogBuilderThemeSummary(
+        key=theme.key, version=theme.version,
+        display_name=theme.display_name, description=theme.description,
+    ) for theme in catalog_theme_definitions()]
+
+
 @router.post("/builds", response_model=CatalogBuildRead)
 def create_build(
     request: CatalogBuildCreate,
@@ -107,6 +117,10 @@ def create_build(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Catalog layout not found.",
         ) from exc
+    except UnknownCatalogThemeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except InvalidCatalogPaletteError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except CatalogSnapshotReadinessError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

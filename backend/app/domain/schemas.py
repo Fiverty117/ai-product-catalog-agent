@@ -1157,6 +1157,13 @@ class CatalogBuilderLayoutSummary(StrictSchema):
     orientation: Literal["portrait"]
 
 
+class CatalogBuilderThemeSummary(StrictSchema):
+    key: Literal["minimal", "premium", "organic", "bold"]
+    version: NonEmptyText
+    display_name: NonEmptyText
+    description: NonEmptyText
+
+
 class ProductCopyEditorialEffectiveSummary(StrictSchema):
     state: ProductCopyResolutionState
     short_description: ProductShortDescription | None
@@ -1602,6 +1609,35 @@ class CatalogRenderJobPayloadV2(CatalogRenderJobPayload):
         return self
 
 
+class ResolvedCatalogTheme(StrictSchema):
+    schema_version: Literal["catalog-theme-v1"]
+    theme_key: Literal["minimal", "premium", "organic", "bold"]
+    theme_version: NonEmptyText
+    css_class: Literal["theme-minimal", "theme-premium", "theme-organic", "theme-bold"]
+    primary_color: CatalogBrandColor
+    accent_color: CatalogBrandColor
+    primary_contrast_color: CatalogBrandColor
+    accent_contrast_color: CatalogBrandColor
+    palette_source: Literal["publisher", "custom"]
+
+    @field_validator("primary_color", "accent_color", "primary_contrast_color", "accent_contrast_color")
+    @classmethod
+    def canonical_theme_color(cls, value: str) -> str:
+        return value.upper()
+
+
+class CatalogRenderJobPayloadV3(CatalogRenderJobPayloadV2):
+    theme_schema_version: Literal["catalog-theme-v1"]
+    theme_hash: Sha256
+    theme_data: ResolvedCatalogTheme
+
+    @model_validator(mode="after")
+    def validate_theme_lineage(self):
+        if self.theme_data.schema_version != self.theme_schema_version:
+            raise ValueError("frozen theme schema lineage does not match render Job")
+        return self
+
+
 class CatalogBrandingView(StrictSchema):
     display_name: NonEmptyText
     logo_data_uri: Annotated[str, StringConstraints(pattern=r"^data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$")] | None = None
@@ -1647,6 +1683,7 @@ class CatalogRenderViewModel(StrictSchema):
     orientation: Literal["portrait", "landscape"]
     store_name: NonEmptyText
     branding: CatalogBrandingView | None = None
+    theme: ResolvedCatalogTheme | None = None
     layout: CatalogRenderLayoutView
     title: NonEmptyText
     as_of_label: NonEmptyText
@@ -1672,6 +1709,9 @@ class CatalogRenderRunRead(ReadSchema):
     branding_schema_version: str | None
     branding_hash: str | None
     branding_data: ResolvedCatalogBranding | None
+    theme_schema_version: str | None = None
+    theme_hash: str | None = None
+    theme_data: ResolvedCatalogTheme | None = None
     status: ExtractionRunStatus
     sanitized_error: str | None
     started_at: datetime
@@ -1701,6 +1741,10 @@ class CatalogBuildCreate(StrictSchema):
     catalog_brand_profile_id: uuid.UUID
     layout_key: NonEmptyText
     layout_version: NonEmptyText
+    theme_key: Literal["minimal", "premium", "organic", "bold"] | None = None
+    theme_version: str | None = None
+    primary_color_override: CatalogBrandColor | None = None
+    accent_color_override: CatalogBrandColor | None = None
     currency: CurrencyCode = "PYG"
     idempotency_key: CatalogBuildIdempotencyKey
 
@@ -1715,6 +1759,19 @@ class CatalogBuildCreate(StrictSchema):
     @classmethod
     def normalize_currency(cls, value: str) -> str:
         return value.upper()
+
+    @field_validator("primary_color_override", "accent_color_override")
+    @classmethod
+    def normalize_override(cls, value: str | None) -> str | None:
+        return value.upper() if value is not None else None
+
+    @model_validator(mode="after")
+    def validate_theme_choice(self):
+        if (self.theme_key is None) != (self.theme_version is None):
+            raise ValueError("theme key and version must be supplied together")
+        if self.theme_key is None and (self.primary_color_override is not None or self.accent_color_override is not None):
+            raise ValueError("palette overrides require a theme")
+        return self
 
 
 class CatalogBuildArtifactSummary(StrictSchema):
@@ -1737,6 +1794,12 @@ class CatalogBuildRead(StrictSchema):
     layout_key: Literal["classic", "dense", "compact"]
     layout_version: NonEmptyText
     layout_display_label: NonEmptyText
+    theme_key: str | None = None
+    theme_version: str | None = None
+    theme_display_label: str = "Legacy"
+    palette_source: Literal["publisher", "custom", "legacy"] = "legacy"
+    primary_color: CatalogBrandColor | None = None
+    accent_color: CatalogBrandColor | None = None
     created_at: datetime
     error: str | None
     can_retry: bool

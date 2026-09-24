@@ -135,6 +135,25 @@ select:focus-visible {
   color: #6a756f;
   font-size: 0.88rem;
 }
+.theme-control, .palette-control { grid-column: 1 / -1; }
+.theme-option-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 9px; }
+.theme-option { display: grid; gap: 4px; padding: 11px; border: 1px solid #d7dfd9; border-radius: 9px; cursor: pointer; background: #fff; }
+.theme-option:has(input:checked) { border-color: #496d50; box-shadow: inset 0 0 0 1px #496d50; }
+.theme-option input { justify-self: start; }
+.theme-option small { color: #66736b; font-weight: 400; }
+.theme-swatch { height: 20px; border-radius: 4px; background: linear-gradient(90deg, #ffffff 0 58%, #e6ece7 58%); border: 1px solid #d8dfd9; }
+.theme-preview-premium .theme-swatch { background: linear-gradient(90deg, #f6f2eb 0 58%, #d7c6a5 58%); }
+.theme-preview-organic .theme-swatch { background: linear-gradient(90deg, #edf3e8 0 58%, #a7c29a 58%); border-radius: 12px; }
+.theme-preview-bold .theme-swatch { background: linear-gradient(90deg, #263c2c 0 58%, #d8af5d 58%); }
+.palette-control { border-top: 1px solid #e2e8e2; padding-top: 13px; }
+.palette-control p { margin: 5px 0 10px; color: #56645a; }
+.palette-fields { display: flex; flex-wrap: wrap; gap: 14px; }
+.palette-fields label { grid-template-columns: auto 46px minmax(100px, 140px); align-items: center; }
+.palette-fields input[type="color"] { width: 42px; height: 36px; padding: 2px; border: 1px solid #cbd5cf; border-radius: 6px; }
+.palette-fields input[type="text"] { padding: 8px; border: 1px solid #cbd5cf; border-radius: 6px; font-family: monospace; }
+.palette-control button { margin-top: 9px; }
+.field-error { color: #a32f28 !important; }
+@media (max-width: 760px) { .theme-option-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 label {
   display: grid;

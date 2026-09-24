@@ -1442,6 +1442,9 @@ class CatalogRenderRun(Base):
     branding_schema_version: Mapped[str | None] = mapped_column(String(100))
     branding_hash: Mapped[str | None] = mapped_column(String(64))
     branding_data: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    theme_schema_version: Mapped[str | None] = mapped_column(String(100))
+    theme_hash: Mapped[str | None] = mapped_column(String(64))
+    theme_data: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     status: Mapped[ExtractionRunStatus] = mapped_column(
         Enum(
             ExtractionRunStatus,
