@@ -12,6 +12,7 @@ from app.domain.schemas import (
     CatalogBuilderLayoutSummary,
     CatalogBuilderThemeSummary,
     CatalogBuilderCoverLayoutSummary,
+    CatalogBuilderClosingLayoutSummary,
     CatalogCoverAssetRead,
     CatalogBuilderProductList,
     CatalogBuildCreate,
@@ -48,6 +49,7 @@ from app.services.catalog_builder import (
 from app.rendering.catalog_layouts import UnknownCatalogLayoutError
 from app.rendering.catalog_themes import InvalidCatalogPaletteError, UnknownCatalogThemeError, catalog_theme_definitions
 from app.rendering.catalog_covers import UnknownCatalogCoverError, catalog_cover_definitions
+from app.rendering.catalog_closings import CatalogClosingError, UnknownCatalogClosingError, catalog_closing_definitions
 from app.db.models import CatalogCoverAsset
 from app.services.catalog_cover_assets import (
     MAX_COVER_HERO_BYTES, CatalogCoverAssetError, CatalogCoverAssetIntegrityError,
@@ -108,6 +110,14 @@ def list_cover_layouts() -> list[CatalogBuilderCoverLayoutSummary]:
         key=item.key, version=item.version, display_name=item.display_name,
         description=item.description, requires_hero=item.requires_hero,
     ) for item in catalog_cover_definitions()]
+
+
+@router.get("/closing-layouts", response_model=list[CatalogBuilderClosingLayoutSummary])
+def list_closing_layouts() -> list[CatalogBuilderClosingLayoutSummary]:
+    return [CatalogBuilderClosingLayoutSummary(
+        key=item.key, version=item.version, display_name=item.display_name,
+        description=item.description, requires_contact=item.requires_contact,
+    ) for item in catalog_closing_definitions()]
 
 
 @router.post("/cover-assets", response_model=CatalogCoverAssetRead)
@@ -172,6 +182,10 @@ def create_build(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except UnknownCatalogCoverError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except UnknownCatalogClosingError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CatalogClosingError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except UnknownCatalogCoverAssetError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except CatalogCoverAssetError as exc:

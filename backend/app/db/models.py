@@ -1470,6 +1470,9 @@ class CatalogRenderRun(Base):
     cover_schema_version: Mapped[str | None] = mapped_column(String(100))
     cover_hash: Mapped[str | None] = mapped_column(String(64))
     cover_data: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    closing_schema_version: Mapped[str | None] = mapped_column(String(100))
+    closing_hash: Mapped[str | None] = mapped_column(String(64))
+    closing_data: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     status: Mapped[ExtractionRunStatus] = mapped_column(
         Enum(
             ExtractionRunStatus,

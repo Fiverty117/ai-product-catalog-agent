@@ -10,6 +10,8 @@ import {
   CatalogCoverLayout,
   CatalogCoverAsset,
   CatalogCoverInput,
+  CatalogClosingLayout,
+  CatalogClosingInput,
   ProductSummary,
   ApiError,
   createCatalogBuild,
@@ -18,6 +20,7 @@ import {
   fetchLayouts,
   fetchThemes,
   fetchCoverLayouts,
+  fetchClosingLayouts,
   fetchProducts,
   retryCatalogBuild,
   resolveApiUrl,
@@ -31,6 +34,22 @@ const BUILD_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 const VALID_COLOR = /^#[0-9A-Fa-f]{6}$/;
 const COVER_TEXT_HAS_MARKUP = /[<>]/;
 const COVER_MAX_FILE_BYTES = 10 * 1024 * 1024;
+const CLOSING_CONTACT_KEYS = ["publisher_contact", "publisher_social", "whatsapp", "phone", "instagram", "website", "address"] as const;
+type ClosingContactKey = (typeof CLOSING_CONTACT_KEYS)[number];
+type ClosingContactState = { enabled: boolean; useCustom: boolean; value: string };
+const CLOSING_CONTACT_LABELS: Record<ClosingContactKey, string> = {
+  publisher_contact: "Publisher contact", publisher_social: "Publisher social",
+  whatsapp: "WhatsApp", phone: "Phone", instagram: "Instagram", website: "Website", address: "Address",
+};
+function emptyClosingContacts(): Record<ClosingContactKey, ClosingContactState> {
+  return Object.fromEntries(CLOSING_CONTACT_KEYS.map((key) => [key, { enabled: false, useCustom: false, value: "" }])) as Record<ClosingContactKey, ClosingContactState>;
+}
+function validHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && Boolean(url.hostname) && !url.username && !url.password && !/\s|\\|[<>]/.test(value);
+  } catch { return false; }
+}
 
 function rememberBuildId(buildId: string): void {
   const url = new URL(window.location.href);
@@ -169,6 +188,7 @@ export function CatalogBuilderPage() {
   const [layouts, setLayouts] = useState<CatalogLayout[] | null>(null);
   const [themes, setThemes] = useState<CatalogTheme[] | null>(null);
   const [coverLayouts, setCoverLayouts] = useState<CatalogCoverLayout[] | null>(null);
+  const [closingLayouts, setClosingLayouts] = useState<CatalogClosingLayout[] | null>(null);
   const [search, setSearch] = useState("");
   const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -187,6 +207,15 @@ export function CatalogBuilderPage() {
   const [coverHero, setCoverHero] = useState<CatalogCoverAsset | null>(null);
   const [coverUploadError, setCoverUploadError] = useState<string | null>(null);
   const [isUploadingCover, setIsUploadingCover] = useState(false);
+  const [closingEnabled, setClosingEnabled] = useState(false);
+  const [closingKey, setClosingKey] = useState<CatalogClosingLayout["key"]>("contact");
+  const [closingHeading, setClosingHeading] = useState("Hacé tu pedido");
+  const [closingNote, setClosingNote] = useState("");
+  const [closingShowLogo, setClosingShowLogo] = useState(true);
+  const [closingContacts, setClosingContacts] = useState<Record<ClosingContactKey, ClosingContactState>>(emptyClosingContacts);
+  const [closingQrEnabled, setClosingQrEnabled] = useState(false);
+  const [closingQrTarget, setClosingQrTarget] = useState<"whatsapp" | "website" | "custom_url">("whatsapp");
+  const [closingQrCustomUrl, setClosingQrCustomUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -224,12 +253,13 @@ export function CatalogBuilderPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all([fetchBrandProfiles(controller.signal), fetchLayouts(controller.signal), fetchThemes(controller.signal), fetchCoverLayouts(controller.signal)])
-      .then(([nextProfiles, nextLayouts, nextThemes, nextCoverLayouts]) => {
+    Promise.all([fetchBrandProfiles(controller.signal), fetchLayouts(controller.signal), fetchThemes(controller.signal), fetchCoverLayouts(controller.signal), fetchClosingLayouts(controller.signal)])
+      .then(([nextProfiles, nextLayouts, nextThemes, nextCoverLayouts, nextClosingLayouts]) => {
         setProfiles(nextProfiles);
         setLayouts(nextLayouts);
         setThemes(nextThemes);
         setCoverLayouts(nextCoverLayouts);
+        setClosingLayouts(nextClosingLayouts);
         setBrandProfileId((current) => current || nextProfiles[0]?.id || "");
         if (!nextLayouts.some((layout) => layout.key === "classic") && nextLayouts[0]) {
           setLayoutKey(nextLayouts[0].key);
@@ -242,6 +272,7 @@ export function CatalogBuilderPage() {
           setLayouts([]);
           setThemes([]);
           setCoverLayouts([]);
+          setClosingLayouts([]);
           setError("Catalog configuration could not be loaded.");
         }
       });
@@ -309,6 +340,7 @@ export function CatalogBuilderPage() {
   const selectedLayout = layouts?.find((layout) => layout.key === layoutKey);
   const selectedTheme = themes?.find((theme) => theme.key === themeKey);
   const selectedCoverLayout = coverLayouts?.find((layout) => layout.key === coverKey);
+  const selectedClosingLayout = closingLayouts?.find((layout) => layout.key === closingKey);
   const customPalette = primaryOverride !== null || accentOverride !== null;
   const primaryColor = primaryOverride ?? selectedProfile?.primary_color ?? "#000000";
   const accentColor = accentOverride ?? selectedProfile?.accent_color ?? "#000000";
@@ -322,6 +354,32 @@ export function CatalogBuilderPage() {
     ![normalizedCoverTitle, normalizedCoverSubtitle, normalizedCoverEdition].some((value) => COVER_TEXT_HAS_MARKUP.test(value))
   );
   const coverValid = !coverEnabled || (Boolean(selectedCoverLayout) && coverTextValid && (!selectedCoverLayout?.requires_hero || Boolean(coverHero)));
+  const normalizedClosingHeading = closingHeading.trim().replace(/\s+/g, " ");
+  const normalizedClosingNote = closingNote.trim().replace(/\s+/g, " ");
+  const effectiveClosingValue = (key: ClosingContactKey): string => {
+    const state = closingContacts[key];
+    if (key === "publisher_contact" && !state.useCustom) return selectedProfile?.contact_text ?? "";
+    if (key === "publisher_social" && !state.useCustom) return selectedProfile?.social_handle ?? "";
+    return state.value.trim();
+  };
+  const enabledClosingKeys = CLOSING_CONTACT_KEYS.filter((key) => closingContacts[key].enabled);
+  const closingContactsValid = enabledClosingKeys.every((key) => {
+    const value = effectiveClosingValue(key);
+    if (!value || /[<>\x00-\x1f]/.test(value)) return false;
+    if (key === "website") return validHttpUrl(value);
+    if (key === "instagram") return /^@?[A-Za-z0-9._]{1,30}$/.test(value);
+    if (key === "whatsapp" || key === "phone") return /^\+?[0-9][0-9(). -]*$/.test(value) && value.replace(/\D/g, "").length >= 4;
+    return value.length <= (key === "address" ? 240 : key === "publisher_contact" ? 500 : 255);
+  });
+  const qrTargetPreview = closingQrTarget === "custom_url" ? closingQrCustomUrl.trim() : effectiveClosingValue(closingQrTarget);
+  const closingQrValid = !closingQrEnabled || (closingQrTarget === "custom_url"
+    ? validHttpUrl(qrTargetPreview)
+    : closingContacts[closingQrTarget].enabled && (closingQrTarget === "website" ? validHttpUrl(qrTargetPreview) : /^\+[0-9][0-9(). -]*$/.test(qrTargetPreview)));
+  const closingValid = !closingEnabled || (Boolean(selectedClosingLayout) && normalizedClosingHeading.length <= 80 && normalizedClosingNote.length <= 300 &&
+    !COVER_TEXT_HAS_MARKUP.test(normalizedClosingHeading + normalizedClosingNote) && closingContactsValid && closingQrValid &&
+    normalizedClosingHeading.length + normalizedClosingNote.length + enabledClosingKeys.reduce((count, key) => count + effectiveClosingValue(key).length, 0) <= 900 &&
+    Boolean(normalizedClosingHeading || normalizedClosingNote || enabledClosingKeys.length || closingQrEnabled) &&
+    (!selectedClosingLayout?.requires_contact || enabledClosingKeys.length > 0));
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allSelectedReady = selectedIds.every((id) => selectedProducts[id]?.readiness.ready);
   const readyCount = products?.filter((product) => product.readiness.ready).length ?? 0;
@@ -355,7 +413,19 @@ export function CatalogBuilderPage() {
     );
   }, []);
 
-  const initialLoading = products === null || profiles === null || layouts === null || themes === null || coverLayouts === null;
+  const initialLoading = products === null || profiles === null || layouts === null || themes === null || coverLayouts === null || closingLayouts === null;
+
+  const resetClosing = () => {
+    setClosingEnabled(false);
+    setClosingKey("contact");
+    setClosingHeading("Hacé tu pedido");
+    setClosingNote("");
+    setClosingShowLogo(true);
+    setClosingContacts(emptyClosingContacts());
+    setClosingQrEnabled(false);
+    setClosingQrTarget("whatsapp");
+    setClosingQrCustomUrl("");
+  };
 
   const resetCover = () => {
     setCoverEnabled(false);
@@ -415,7 +485,7 @@ export function CatalogBuilderPage() {
   const handleCreate = async () => {
     if (
       submittingRef.current || selectedIds.length === 0 ||
-      !brandProfileId || !selectedLayout || !selectedTheme || !paletteValid || !coverValid || isUploadingCover
+      !brandProfileId || !selectedLayout || !selectedTheme || !paletteValid || !coverValid || !closingValid || isUploadingCover
     ) return;
     submittingRef.current = true;
     setIsCreating(true);
@@ -428,6 +498,20 @@ export function CatalogBuilderPage() {
       show_publisher_logo: showPublisherLogo && Boolean(selectedProfile?.logo_url),
       ...(coverHero ? { hero_asset_id: coverHero.asset_id } : {}),
     } : { enabled: false };
+    const closingChoice: CatalogClosingInput = closingEnabled ? {
+      enabled: true, closing_key: selectedClosingLayout!.key, closing_version: selectedClosingLayout!.version,
+      ...(normalizedClosingHeading ? { heading: normalizedClosingHeading } : {}),
+      ...(normalizedClosingNote ? { note: normalizedClosingNote } : {}),
+      show_publisher_logo: closingShowLogo && Boolean(selectedProfile?.logo_url),
+      ...Object.fromEntries(CLOSING_CONTACT_KEYS.map((key) => [key, closingContacts[key].enabled
+        ? { enabled: true, ...((key !== "publisher_contact" && key !== "publisher_social") || closingContacts[key].useCustom
+          ? { override: closingContacts[key].value.trim() } : {}) }
+        : { enabled: false }])),
+      qr: closingQrEnabled ? {
+        enabled: true, target_type: closingQrTarget,
+        ...(closingQrTarget === "custom_url" ? { custom_url: closingQrCustomUrl.trim() } : {}),
+      } : { enabled: false },
+    } as CatalogClosingInput : { enabled: false };
     const choices = {
       product_ids: [...selectedIds],
       catalog_brand_profile_id: brandProfileId,
@@ -438,6 +522,7 @@ export function CatalogBuilderPage() {
       ...(primaryOverride !== null ? { primary_color_override: primaryOverride.toUpperCase() } : {}),
       ...(accentOverride !== null ? { accent_color_override: accentOverride.toUpperCase() } : {}),
       cover: coverChoice,
+      closing: closingChoice,
       currency: "PYG",
     };
     const pending = pendingCreateRef.current;
@@ -451,6 +536,7 @@ export function CatalogBuilderPage() {
       primary_color_override: pending.primary_color_override,
       accent_color_override: pending.accent_color_override,
       cover: pending.cover,
+      closing: pending.closing,
       currency: pending.currency,
     }) === JSON.stringify(choices)
       ? pending
@@ -497,7 +583,7 @@ export function CatalogBuilderPage() {
     }
   };
 
-  const canCreate = selectedIds.length > 0 && Boolean(brandProfileId && selectedLayout && selectedTheme && paletteValid && coverValid && !isUploadingCover);
+  const canCreate = selectedIds.length > 0 && Boolean(brandProfileId && selectedLayout && selectedTheme && paletteValid && coverValid && closingValid && !isUploadingCover);
 
   return (
     <main className="builder-shell">
@@ -603,6 +689,67 @@ export function CatalogBuilderPage() {
             <button type="button" className="cover-reset" onClick={resetCover}>Reset cover</button>
           </div>}
         </div>
+        <div className="closing-control" role="group" aria-label="Catalog closing page">
+          <div className="cover-control-heading">
+            <div><strong>Closing &amp; ordering</strong><p>Optional final page. Contact details and QR are frozen for this build.</p></div>
+            <label className="cover-enable"><input type="checkbox" checked={closingEnabled} onChange={(event) => {
+              setClosingEnabled(event.target.checked);
+              if (event.target.checked) setClosingContacts((current) => ({
+                ...current,
+                publisher_contact: { ...current.publisher_contact, enabled: current.publisher_contact.enabled || Boolean(selectedProfile?.contact_text) },
+                publisher_social: { ...current.publisher_social, enabled: current.publisher_social.enabled || Boolean(selectedProfile?.social_handle) },
+              }));
+            }} /> Include closing page</label>
+          </div>
+          {closingEnabled && <div className="closing-options">
+            <div role="group" aria-label="Closing style">
+              <span>Closing style</span>
+              <div className="cover-layout-grid">
+                {closingLayouts?.map((layout) => <label className="cover-layout-option" key={`${layout.key}-${layout.version}`}>
+                  <input type="radio" name="catalog-closing" value={layout.key} checked={closingKey === layout.key} onChange={() => setClosingKey(layout.key)} />
+                  <strong>{layout.display_name}</strong><small>{layout.description}</small>
+                </label>)}
+              </div>
+            </div>
+            <div className="closing-text-fields">
+              <label>Heading (optional)<input type="text" maxLength={80} value={closingHeading} onChange={(event) => setClosingHeading(event.target.value)} /></label>
+              <label>Short note (optional)<textarea maxLength={300} rows={3} value={closingNote} onChange={(event) => setClosingNote(event.target.value)} /></label>
+            </div>
+            <label className="cover-logo-control"><input type="checkbox" checked={closingShowLogo && Boolean(selectedProfile?.logo_url)} disabled={!selectedProfile?.logo_url} onChange={(event) => setClosingShowLogo(event.target.checked)} /> Show publisher logo{!selectedProfile?.logo_url ? " (no logo available)" : ""}</label>
+            <fieldset className="closing-contacts">
+              <legend>Contact methods</legend>
+              <p>Publisher contact and social values come from the selected frozen profile unless you override them here. Other methods are for this build only.</p>
+              {CLOSING_CONTACT_KEYS.map((key) => {
+                const state = closingContacts[key];
+                const fromProfile = key === "publisher_contact" ? selectedProfile?.contact_text : key === "publisher_social" ? selectedProfile?.social_handle : null;
+                return <div className="closing-contact-row" key={key}>
+                  <label className="cover-enable"><input type="checkbox" checked={state.enabled} onChange={(event) => setClosingContacts((current) => ({ ...current, [key]: { ...current[key], enabled: event.target.checked } }))} /> {CLOSING_CONTACT_LABELS[key]}</label>
+                  {state.enabled && <div className="closing-contact-value">
+                    {fromProfile !== null && fromProfile !== undefined && !state.useCustom && <span className="closing-profile-value">From publisher: {fromProfile || "No value"}</span>}
+                    {(key === "publisher_contact" || key === "publisher_social") && <label className="cover-enable"><input type="checkbox" checked={state.useCustom} onChange={(event) => setClosingContacts((current) => ({ ...current, [key]: { ...current[key], useCustom: event.target.checked } }))} /> Override for this build</label>}
+                    {((key !== "publisher_contact" && key !== "publisher_social") || state.useCustom) && <input
+                      aria-label={`${CLOSING_CONTACT_LABELS[key]} value`} type="text" maxLength={key === "publisher_contact" ? 500 : key === "address" ? 240 : 255}
+                      placeholder={key === "website" ? "https://example.com" : key === "whatsapp" ? "+595..." : undefined}
+                      value={state.value} onChange={(event) => setClosingContacts((current) => ({ ...current, [key]: { ...current[key], value: event.target.value } }))} />}
+                  </div>}
+                </div>;
+              })}
+            </fieldset>
+            <fieldset className="closing-qr">
+              <legend>QR code</legend>
+              <label className="cover-enable"><input type="checkbox" checked={closingQrEnabled} onChange={(event) => setClosingQrEnabled(event.target.checked)} /> Include QR code</label>
+              {closingQrEnabled && <>
+                <label>QR destination<select value={closingQrTarget} onChange={(event) => setClosingQrTarget(event.target.value as typeof closingQrTarget)}>
+                  <option value="whatsapp">Visible WhatsApp number</option><option value="website">Visible website</option><option value="custom_url">Custom URL</option>
+                </select></label>
+                {closingQrTarget === "custom_url" && <label>Custom QR URL<input type="url" value={closingQrCustomUrl} placeholder="https://example.com/order" onChange={(event) => setClosingQrCustomUrl(event.target.value)} /></label>}
+                <small>QR destination: {qrTargetPreview || "Choose a valid destination"}</small>
+              </>}
+            </fieldset>
+            {!closingValid && <p className="field-error" role="alert">Complete the closing page with valid plain text, contact methods, and any QR destination. Order style needs a contact method.</p>}
+            <button type="button" className="cover-reset" onClick={resetClosing}>Reset closing</button>
+          </div>}
+        </div>
       </section>
 
       {error && <div className="notice notice-error" role="alert">{error}</div>}
@@ -685,6 +832,9 @@ export function CatalogBuilderPage() {
             {coverEnabled && <div><dt>Title</dt><dd>{normalizedCoverTitle || "—"}</dd></div>}
             {coverEnabled && normalizedCoverEdition && <div><dt>Edition</dt><dd>{normalizedCoverEdition}</dd></div>}
             {coverEnabled && <div><dt>Hero</dt><dd>{coverHero ? "Custom image" : "None"}</dd></div>}
+            <div><dt>Closing</dt><dd>{closingEnabled ? selectedClosingLayout?.display_name ?? "Not available" : "None"}</dd></div>
+            {closingEnabled && <div><dt>Contacts</dt><dd>{enabledClosingKeys.length ? enabledClosingKeys.map((key) => CLOSING_CONTACT_LABELS[key]).join(", ") : "None"}</dd></div>}
+            {closingEnabled && <div><dt>QR</dt><dd>{closingQrEnabled ? closingQrTarget.replace("_", " ") : "None"}</dd></div>}
             <div><dt>Columns</dt><dd>{selectedLayout?.products_per_row ?? "—"}</dd></div>
             <div><dt>Page</dt><dd>{selectedLayout ? `${selectedLayout.page_size} · ${selectedLayout.orientation}` : "—"}</dd></div>
             <div><dt>All selected Products ready</dt><dd>{selectedIds.length > 0 && allSelectedReady ? "Yes" : "—"}</dd></div>
@@ -719,6 +869,9 @@ export function CatalogBuilderPage() {
                 {build.cover_title ? ` · ${build.cover_title}` : ""}
                 {build.cover_edition_label ? ` · ${build.cover_edition_label}` : ""}
                 {build.cover_hero_present ? " · Custom Hero" : ""}
+                {" · Closing: "}{build.closing_enabled ? build.closing_display_label ?? "Closing" : "None"}
+                {build.closing_enabled && build.closing_contacts?.length ? ` · ${build.closing_contacts.map((contact) => CLOSING_CONTACT_LABELS[contact.kind as ClosingContactKey] ?? contact.kind).join(", ")}` : ""}
+                {build.closing_qr_enabled ? ` · QR: ${build.closing_qr_target_type?.replace("_", " ")}` : ""}
                 {build.artifact ? ` · ${build.artifact.page_count} ${build.artifact.page_count === 1 ? "page" : "pages"}` : ""}
               </p>
               {(build.status === "queued" || build.status === "running") && (

@@ -410,6 +410,80 @@ def test_v4_disabled_cover_is_frozen_without_fabricating_v3_cover(build_store):
         assert session.get(CatalogBuild, uuid.UUID(historical.json()["id"])).job.job_type == "catalog.render.v3"
 
 
+def test_v5_closing_build_freezes_contacts_qr_and_run_audit(build_store):
+    factory, client, storage_root, catalogs_dir = build_store
+    with factory() as session:
+        product, _, _, _, profile = _seed_ready(session, storage_root)
+        profile.contact_text = "Atención comercial"
+        session.commit()
+        profile_id = profile.id
+    layouts = client.get("/api/catalog-builder/closing-layouts")
+    assert layouts.status_code == 200
+    assert [item["key"] for item in layouts.json()] == ["minimal", "contact", "order"]
+    request = {**_request(product, profile), "theme_key": "premium", "theme_version": "1",
+               "cover": {"enabled": False},
+               "closing": {"enabled": True, "closing_key": "order", "closing_version": "1",
+                           "heading": "Hacé tu pedido", "publisher_contact": {"enabled": True},
+                           "whatsapp": {"enabled": True, "override": "+595 981 123456"},
+                           "qr": {"enabled": True, "target_type": "whatsapp"}}}
+    created = client.post("/api/catalog-builder/builds", json=request)
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["closing_enabled"] is True and body["closing_display_label"] == "Order"
+    assert body["closing_qr_enabled"] is True and body["closing_qr_target_type"] == "whatsapp"
+    assert {item["kind"]: item["value"] for item in body["closing_contacts"]} == {
+        "publisher_contact": "Atención comercial", "whatsapp": "+595 981 123456"}
+    assert client.post("/api/catalog-builder/builds", json=request).json()["id"] == body["id"]
+    changed = {**request, "closing": {**request["closing"], "heading": "Otro pedido"}}
+    assert client.post("/api/catalog-builder/builds", json=changed).status_code == 409
+    with factory() as session:
+        build = session.get(CatalogBuild, uuid.UUID(body["id"]))
+        assert build.job.job_type == "catalog.render.v5"
+        frozen = build.job.payload["closing_data"]
+        frozen_hash = build.job.payload["closing_hash"]
+        assert frozen["qr_target_url"] == "https://wa.me/595981123456"
+        session.get(CatalogBrandProfile, profile_id).contact_text = "Otro contacto"
+        build.job.status = JobStatus.FAILED
+        build.job.attempts = 1
+        session.commit()
+    assert client.get(f"/api/catalog-builder/builds/{body['id']}").json()["closing_contacts"] == body["closing_contacts"]
+    assert client.post(f"/api/catalog-builder/builds/{body['id']}/retry").status_code == 200
+    renderer = FakeRenderer(_valid_pdf())
+    worker = JobWorker(factory, catalog_render_handlers(factory, renderer, storage_root=storage_root,
+        catalogs_dir=catalogs_dir, template_root=TEMPLATE_ROOT), accepted_job_types={"catalog.render.v5"})
+    worker.run_once()
+    assert renderer.html is not None and "Hacé tu pedido" in renderer.html
+    assert "Atención comercial" in renderer.html and "Otro contacto" not in renderer.html
+    assert "data:image/png;base64," in renderer.html and 'href="https://wa.me/595981123456"' in renderer.html
+    result = client.get(f"/api/catalog-builder/builds/{body['id']}").json()
+    assert result["status"] == "succeeded" and result["closing_contacts"] == body["closing_contacts"]
+    with factory() as session:
+        build = session.get(CatalogBuild, uuid.UUID(body["id"]))
+        run = session.scalar(select(CatalogRenderRun).where(CatalogRenderRun.job_id == build.job_id))
+        assert run.closing_schema_version == "catalog-closing-v1"
+        assert run.closing_hash == frozen_hash and run.closing_data == frozen
+
+
+def test_v5_disabled_closing_is_explicit_and_old_v4_stays_historical(build_store):
+    factory, client, storage_root, _ = build_store
+    with factory() as session:
+        product, _, _, _, profile = _seed_ready(session, storage_root)
+    request = {**_request(product, profile), "theme_key": "premium", "theme_version": "1",
+               "cover": {"enabled": False}, "closing": {"enabled": False}}
+    current = client.post("/api/catalog-builder/builds", json=request)
+    assert current.status_code == 200, current.text
+    assert current.json()["closing_enabled"] is False
+    with factory() as session:
+        build = session.get(CatalogBuild, uuid.UUID(current.json()["id"]))
+        assert build.job.job_type == "catalog.render.v5" and build.job.payload["closing_data"]["enabled"] is False
+    old = {key: value for key, value in request.items() if key != "closing"}
+    old["idempotency_key"] = "historical-v4"
+    legacy = client.post("/api/catalog-builder/builds", json=old)
+    assert legacy.status_code == 200
+    with factory() as session:
+        assert session.get(CatalogBuild, uuid.UUID(legacy.json()["id"])).job.job_type == "catalog.render.v4"
+
+
 def test_create_is_authoritative_transactional_and_idempotent(build_store):
     factory, client, storage_root, _ = build_store
     with factory() as session:

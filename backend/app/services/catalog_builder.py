@@ -113,6 +113,8 @@ def list_catalog_builder_brand_profiles(
             ),
             primary_color=profile.primary_color,
             accent_color=profile.accent_color,
+            contact_text=profile.contact_text,
+            social_handle=profile.social_handle,
         )
         for profile in profiles
     ]

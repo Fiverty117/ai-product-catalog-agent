@@ -1,4 +1,5 @@
 import uuid
+from urllib.parse import urlsplit
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any, Generic, Literal, TypeVar
@@ -1146,6 +1147,8 @@ class CatalogBuilderBrandProfileSummary(StrictSchema):
     logo_url: str | None
     primary_color: str
     accent_color: str
+    contact_text: str | None = None
+    social_handle: str | None = None
 
 
 class CatalogBuilderLayoutSummary(StrictSchema):
@@ -1170,6 +1173,14 @@ class CatalogBuilderCoverLayoutSummary(StrictSchema):
     display_name: NonEmptyText
     description: NonEmptyText
     requires_hero: bool
+
+
+class CatalogBuilderClosingLayoutSummary(StrictSchema):
+    key: Literal["minimal", "contact", "order"]
+    version: NonEmptyText
+    display_name: NonEmptyText
+    description: NonEmptyText
+    requires_contact: bool
 
 
 class CatalogCoverAssetRead(StrictSchema):
@@ -1714,6 +1725,95 @@ class CatalogRenderJobPayloadV4(CatalogRenderJobPayloadV3):
         return self
 
 
+class ResolvedCatalogClosingContact(StrictSchema):
+    kind: Literal["publisher_contact", "publisher_social", "whatsapp", "phone", "instagram", "website", "address"]
+    value: NonEmptyText
+    href: str | None = None
+
+    @model_validator(mode="after")
+    def validate_link(self):
+        maximum = {"publisher_contact": 500, "publisher_social": 255, "whatsapp": 40,
+                   "phone": 40, "instagram": 31, "website": 255, "address": 240}[self.kind]
+        if len(self.value) > maximum or any(ord(char) < 32 for char in self.value) or "<" in self.value or ">" in self.value:
+            raise ValueError("frozen closing contact must be plain text")
+        if self.href is None:
+            return self
+        if self.kind == "phone":
+            number = self.href[4:] if self.href.startswith("tel:") else ""
+            if not number or (number.startswith("+") and number.count("+") != 1) or not number.lstrip("+").isdigit():
+                raise ValueError("invalid frozen phone link")
+        elif self.kind in ("whatsapp", "instagram", "website"):
+            parts = urlsplit(self.href)
+            if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password or "\\" in self.href:
+                raise ValueError("invalid frozen contact link")
+            if self.kind == "whatsapp" and (parts.scheme != "https" or parts.hostname != "wa.me" or not parts.path.strip("/").isdigit()):
+                raise ValueError("invalid frozen WhatsApp link")
+            if self.kind == "instagram" and (parts.scheme != "https" or parts.hostname != "www.instagram.com"):
+                raise ValueError("invalid frozen Instagram link")
+        else:
+            raise ValueError("this frozen contact cannot be linked")
+        return self
+
+
+class ResolvedCatalogClosing(StrictSchema):
+    schema_version: Literal["catalog-closing-v1"]
+    enabled: bool
+    closing_key: Literal["minimal", "contact", "order"] | None = None
+    closing_version: NonEmptyText | None = None
+    heading: str | None = None
+    note: str | None = None
+    show_publisher_logo: bool = False
+    contacts: list[ResolvedCatalogClosingContact] = Field(default_factory=list)
+    qr_enabled: bool = False
+    qr_target_type: Literal["whatsapp", "website", "custom_url"] | None = None
+    qr_target_url: str | None = None
+    qr_version: Literal["qr-png-m-v1"] | None = None
+
+    @model_validator(mode="after")
+    def validate_state(self):
+        if not self.enabled:
+            if any((self.closing_key, self.closing_version, self.heading, self.note, self.show_publisher_logo,
+                    self.contacts, self.qr_enabled, self.qr_target_type, self.qr_target_url, self.qr_version)):
+                raise ValueError("disabled closing must have no content")
+        elif not self.closing_key or not self.closing_version or not (self.heading or self.note or self.contacts or self.qr_enabled):
+            raise ValueError("enabled closing requires a layout and meaningful content")
+        elif self.closing_key == "order" and not self.contacts:
+            raise ValueError("order closing requires a contact method")
+        if self.enabled:
+            if (self.heading and len(self.heading) > 80) or (self.note and len(self.note) > 300):
+                raise ValueError("frozen closing text exceeds print limits")
+            total_characters = len(self.heading or "") + len(self.note or "") + sum(len(item.value) for item in self.contacts)
+            if total_characters > 900:
+                raise ValueError("closing page content exceeds one-page print budget")
+        if self.qr_enabled != bool(self.qr_target_type and self.qr_target_url and self.qr_version):
+            raise ValueError("closing QR target is incomplete")
+        if self.qr_enabled:
+            parts = urlsplit(self.qr_target_url or "")
+            if (parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password
+                    or len(self.qr_target_url or "") > 255 or "\\" in (self.qr_target_url or "")
+                    or any(char.isspace() or ord(char) < 32 for char in (self.qr_target_url or ""))):
+                raise ValueError("invalid frozen QR URL")
+            if self.qr_target_type in ("whatsapp", "website") and not any(
+                item.kind == self.qr_target_type and item.href == self.qr_target_url for item in self.contacts
+            ):
+                raise ValueError("frozen QR target does not match visible contact")
+        if len({item.kind for item in self.contacts}) != len(self.contacts):
+            raise ValueError("duplicate frozen closing contacts")
+        return self
+
+
+class CatalogRenderJobPayloadV5(CatalogRenderJobPayloadV4):
+    closing_schema_version: Literal["catalog-closing-v1"]
+    closing_hash: Sha256
+    closing_data: ResolvedCatalogClosing
+
+    @model_validator(mode="after")
+    def validate_closing_lineage(self):
+        if self.closing_data.schema_version != self.closing_schema_version:
+            raise ValueError("frozen closing schema lineage does not match render Job")
+        return self
+
+
 class CatalogBrandingView(StrictSchema):
     display_name: NonEmptyText
     logo_data_uri: Annotated[str, StringConstraints(pattern=r"^data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$")] | None = None
@@ -1762,6 +1862,8 @@ class CatalogRenderViewModel(StrictSchema):
     theme: ResolvedCatalogTheme | None = None
     cover: ResolvedCatalogCover | None = None
     cover_hero_data_uri: str | None = None
+    closing: ResolvedCatalogClosing | None = None
+    closing_qr_data_uri: str | None = None
     layout: CatalogRenderLayoutView
     title: NonEmptyText
     as_of_label: NonEmptyText
@@ -1793,6 +1895,9 @@ class CatalogRenderRunRead(ReadSchema):
     cover_schema_version: str | None = None
     cover_hash: str | None = None
     cover_data: ResolvedCatalogCover | None = None
+    closing_schema_version: str | None = None
+    closing_hash: str | None = None
+    closing_data: ResolvedCatalogClosing | None = None
     status: ExtractionRunStatus
     sanitized_error: str | None
     started_at: datetime
@@ -1854,6 +1959,78 @@ class CatalogCoverCreate(StrictSchema):
         return self
 
 
+class CatalogClosingContactChoice(StrictSchema):
+    enabled: bool = False
+    override: str | None = None
+
+    @field_validator("override", mode="before")
+    @classmethod
+    def normalize_override(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or any(ord(char) < 32 for char in value) or "<" in value or ">" in value:
+            raise ValueError("closing contact must be plain text")
+        return value.strip() or None
+
+    @model_validator(mode="after")
+    def disabled_has_no_override(self):
+        if not self.enabled and self.override is not None:
+            raise ValueError("disabled contact cannot carry an override")
+        return self
+
+
+class CatalogClosingQrCreate(StrictSchema):
+    enabled: bool = False
+    target_type: Literal["whatsapp", "website", "custom_url"] | None = None
+    custom_url: str | None = None
+
+    @model_validator(mode="after")
+    def validate_choice(self):
+        if not self.enabled and (self.target_type is not None or self.custom_url is not None):
+            raise ValueError("disabled QR cannot carry a target")
+        if self.enabled and (self.target_type is None or (self.target_type == "custom_url") != bool(self.custom_url)):
+            raise ValueError("QR requires a valid target choice")
+        return self
+
+
+class CatalogClosingCreate(StrictSchema):
+    enabled: bool
+    closing_key: Literal["minimal", "contact", "order"] | None = None
+    closing_version: str | None = None
+    heading: str | None = None
+    note: str | None = None
+    show_publisher_logo: bool | None = None
+    publisher_contact: CatalogClosingContactChoice = Field(default_factory=CatalogClosingContactChoice)
+    publisher_social: CatalogClosingContactChoice = Field(default_factory=CatalogClosingContactChoice)
+    whatsapp: CatalogClosingContactChoice = Field(default_factory=CatalogClosingContactChoice)
+    phone: CatalogClosingContactChoice = Field(default_factory=CatalogClosingContactChoice)
+    instagram: CatalogClosingContactChoice = Field(default_factory=CatalogClosingContactChoice)
+    website: CatalogClosingContactChoice = Field(default_factory=CatalogClosingContactChoice)
+    address: CatalogClosingContactChoice = Field(default_factory=CatalogClosingContactChoice)
+    qr: CatalogClosingQrCreate = Field(default_factory=CatalogClosingQrCreate)
+
+    @field_validator("heading", "note", mode="before")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or "<" in value or ">" in value or any(ord(char) < 32 for char in value):
+            raise ValueError("closing text must be plain text")
+        return " ".join(value.split()) or None
+
+    @model_validator(mode="after")
+    def validate_choice(self):
+        if not self.enabled:
+            if self.model_fields_set != {"enabled"}:
+                raise ValueError("disabled closing accepts only enabled=false")
+            return self
+        if not self.closing_key or not self.closing_version:
+            raise ValueError("enabled closing requires a layout")
+        if (self.heading is not None and len(self.heading) > 80) or (self.note is not None and len(self.note) > 300):
+            raise ValueError("closing heading or note exceeds length limit")
+        return self
+
+
 class CatalogBuildCreate(StrictSchema):
     product_ids: NonEmptyUUIDList
     catalog_brand_profile_id: uuid.UUID
@@ -1864,6 +2041,7 @@ class CatalogBuildCreate(StrictSchema):
     primary_color_override: CatalogBrandColor | None = None
     accent_color_override: CatalogBrandColor | None = None
     cover: CatalogCoverCreate | None = None
+    closing: CatalogClosingCreate | None = None
     currency: CurrencyCode = "PYG"
     idempotency_key: CatalogBuildIdempotencyKey
 
@@ -1890,8 +2068,8 @@ class CatalogBuildCreate(StrictSchema):
             raise ValueError("theme key and version must be supplied together")
         if self.theme_key is None and (self.primary_color_override is not None or self.accent_color_override is not None):
             raise ValueError("palette overrides require a theme")
-        if self.theme_key is None and self.cover is not None:
-            raise ValueError("cover configuration requires a theme")
+        if self.theme_key is None and (self.cover is not None or self.closing is not None):
+            raise ValueError("cover and closing configuration require a theme")
         return self
 
 
@@ -1930,6 +2108,16 @@ class CatalogBuildRead(StrictSchema):
     cover_edition_label: str | None = None
     cover_show_publisher_logo: bool = False
     cover_hero_present: bool = False
+    closing_enabled: bool = False
+    closing_key: str | None = None
+    closing_version: str | None = None
+    closing_display_label: str = "None"
+    closing_heading: str | None = None
+    closing_note: str | None = None
+    closing_show_publisher_logo: bool = False
+    closing_contacts: list[ResolvedCatalogClosingContact] = Field(default_factory=list)
+    closing_qr_enabled: bool = False
+    closing_qr_target_type: str | None = None
     created_at: datetime
     error: str | None
     can_retry: bool

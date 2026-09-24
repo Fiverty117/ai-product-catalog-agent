@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from app.domain.schemas import (
     CatalogRenderJobPayloadV2,
     CatalogRenderJobPayloadV3,
     CatalogRenderJobPayloadV4,
+    CatalogRenderJobPayloadV5,
     CatalogRenderLayoutView,
     CatalogRenderProductView,
     CatalogRenderSectionView,
@@ -42,7 +44,9 @@ from app.domain.schemas import (
     ResolvedCatalogBranding,
     ResolvedCatalogTheme,
     ResolvedCatalogCover,
+    ResolvedCatalogClosing,
     CatalogCoverCreate,
+    CatalogClosingCreate,
 )
 from app.rendering.catalog_layouts import (
     CatalogLayoutDefinition,
@@ -51,6 +55,10 @@ from app.rendering.catalog_layouts import (
 )
 from app.rendering.catalog_themes import hash_resolved_catalog_theme, resolve_catalog_theme, resolve_catalog_theme_definition
 from app.rendering.catalog_covers import hash_resolved_catalog_cover, resolve_catalog_cover, resolve_catalog_cover_definition
+from app.rendering.catalog_closings import (
+    closing_qr_data_uri, hash_resolved_catalog_closing, resolve_catalog_closing,
+    resolve_catalog_closing_definition,
+)
 from app.services.catalog_cover_assets import load_frozen_catalog_cover_hero
 from app.services.catalog_branding import (
     get_active_catalog_brand_profile,
@@ -70,6 +78,7 @@ CATALOG_RENDER_JOB_TYPE = "catalog.render.v1"
 CATALOG_RENDER_JOB_TYPE_V2 = "catalog.render.v2"
 CATALOG_RENDER_JOB_TYPE_V3 = "catalog.render.v3"
 CATALOG_RENDER_JOB_TYPE_V4 = "catalog.render.v4"
+CATALOG_RENDER_JOB_TYPE_V5 = "catalog.render.v5"
 CATALOG_RENDERER_VERSION = "catalog-chromium-v1"
 CATALOG_RENDERER_ENGINE = "chromium"
 PDF_MEDIA_TYPE = "application/pdf"
@@ -125,6 +134,7 @@ class CatalogTemplate:
     css_path: Path
     theme_css_path: Path | None = None
     cover_css_path: Path | None = None
+    closing_css_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -140,21 +150,23 @@ def resolve_catalog_template(
     *,
     template_root: Path = DEFAULT_TEMPLATE_ROOT,
 ) -> CatalogTemplate:
-    if template_key not in ("grabelan-catalog-v1", "grabelan-catalog-v2", "grabelan-catalog-v3"):
+    if template_key not in ("grabelan-catalog-v1", "grabelan-catalog-v2", "grabelan-catalog-v3", "grabelan-catalog-v4"):
         raise UnknownCatalogTemplateError(
             f"unsupported catalog template: {template_key}"
         )
-    themed = template_key in ("grabelan-catalog-v2", "grabelan-catalog-v3")
-    with_cover = template_key == "grabelan-catalog-v3"
+    themed = template_key in ("grabelan-catalog-v2", "grabelan-catalog-v3", "grabelan-catalog-v4")
+    with_closing = template_key == "grabelan-catalog-v4"
+    with_cover = template_key in ("grabelan-catalog-v3", "grabelan-catalog-v4")
     template = CatalogTemplate(
-        key=template_key, version="3.0" if with_cover else "2.0" if themed else "1.0", display_name="Grabelan",
+        key=template_key, version="4.0" if with_closing else "3.0" if with_cover else "2.0" if themed else "1.0", display_name="Grabelan",
         root=template_root.resolve(),
-        html_path=(template_root / ("catalog-v3.html.jinja" if with_cover else "catalog-v2.html.jinja" if themed else "catalog-v1.html.jinja")).resolve(),
+        html_path=(template_root / ("catalog-v4.html.jinja" if with_closing else "catalog-v3.html.jinja" if with_cover else "catalog-v2.html.jinja" if themed else "catalog-v1.html.jinja")).resolve(),
         css_path=(template_root / "catalog-v1.css").resolve(),
         theme_css_path=(template_root / "catalog-v2-themes.css").resolve() if themed else None,
         cover_css_path=(template_root / "catalog-v3-cover.css").resolve() if with_cover else None,
+        closing_css_path=(template_root / "catalog-v4-closing.css").resolve() if with_closing else None,
     )
-    for path in (template.html_path, template.css_path, *([template.theme_css_path] if template.theme_css_path else []), *([template.cover_css_path] if template.cover_css_path else [])):
+    for path in (template.html_path, template.css_path, *([template.theme_css_path] if template.theme_css_path else []), *([template.cover_css_path] if template.cover_css_path else []), *([template.closing_css_path] if template.closing_css_path else [])):
         if not path.is_file() or not path.is_relative_to(template.root):
             raise InvalidCatalogTemplateError(
                 f"catalog template file is missing: {path.name}"
@@ -168,6 +180,8 @@ def hash_catalog_template(template: CatalogTemplate) -> str:
         files.append(template.theme_css_path)
     if template.cover_css_path is not None:
         files.append(template.cover_css_path)
+    if template.closing_css_path is not None:
+        files.append(template.closing_css_path)
     static_root = template.root / "static"
     if static_root.is_dir():
         files.extend(path for path in static_root.rglob("*") if path.is_file())
@@ -236,7 +250,7 @@ def resolve_catalog_render_layout(
 
 
 def build_catalog_render_idempotency_key(
-    payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2 | CatalogRenderJobPayloadV3 | CatalogRenderJobPayloadV4,
+    payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2 | CatalogRenderJobPayloadV3 | CatalogRenderJobPayloadV4 | CatalogRenderJobPayloadV5,
     *,
     job_type: str = CATALOG_RENDER_JOB_TYPE,
 ) -> str:
@@ -248,6 +262,8 @@ def build_catalog_render_idempotency_key(
     if isinstance(payload, CatalogRenderJobPayloadV4):
         # The cover hash captures visual content without upload-row UUIDs.
         values.pop("cover_data")
+    if isinstance(payload, CatalogRenderJobPayloadV5):
+        values.pop("closing_data")
     identity = {"job_type": job_type, **values}
     digest = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
     return f"{job_type}:{digest}"
@@ -389,6 +405,54 @@ def enqueue_catalog_render_v4(
     )
 
 
+def enqueue_catalog_render_v5(
+    session: Session, *, catalog_snapshot_id: uuid.UUID, brand_profile_id: uuid.UUID,
+    theme_key: str, theme_version: str, cover_choice: CatalogCoverCreate,
+    closing_choice: CatalogClosingCreate,
+    primary_color_override: str | None = None, accent_color_override: str | None = None,
+    config: CatalogRenderConfig | Mapping[str, Any] | None = None,
+    template_root: Path = DEFAULT_TEMPLATE_ROOT, storage_root: Path = DEFAULT_STORAGE_ROOT,
+    renderer_version: str = CATALOG_RENDERER_VERSION, max_attempts: int = 3,
+) -> Job:
+    normalized_config = normalize_catalog_render_config(config or {"template_key": "grabelan-catalog-v4"})
+    if normalized_config.template_key != "grabelan-catalog-v4":
+        raise InvalidCatalogRenderConfigError("closing-capable renders require the v4 template")
+    layout = resolve_catalog_render_layout(normalized_config)
+    template = resolve_catalog_template(normalized_config.template_key, template_root=template_root)
+    snapshot = session.get(CatalogSnapshot, catalog_snapshot_id)
+    if snapshot is None:
+        raise InvalidCatalogRenderJobError(f"CatalogSnapshot not found: {catalog_snapshot_id}")
+    read_catalog_snapshot_data(session, snapshot.id)
+    profile = get_active_catalog_brand_profile(session, profile_id=brand_profile_id)
+    branding = resolve_catalog_branding(profile, storage_root=storage_root)
+    theme = resolve_catalog_theme(theme_key, theme_version, branding,
+        primary_color_override=primary_color_override, accent_color_override=accent_color_override)
+    cover = resolve_catalog_cover(cover_choice, branding, session, storage_root=storage_root)
+    closing = resolve_catalog_closing(closing_choice, branding)
+    version = renderer_version.strip()
+    if not version:
+        raise InvalidCatalogRenderJobError("renderer_version is required")
+    payload = CatalogRenderJobPayloadV5(
+        catalog_snapshot_id=snapshot.id, snapshot_content_hash=snapshot.content_hash.lower(),
+        snapshot_schema_version=snapshot.schema_version,
+        template_key=template.key, template_version=template.version,
+        template_hash=hash_catalog_template(template), renderer_version=version,
+        config=normalized_config, config_hash=hash_catalog_render_config(normalized_config),
+        catalog_brand_profile_id=profile.id, branding_schema_version=branding.schema_version,
+        branding_hash=hash_resolved_catalog_branding(branding), branding_data=branding,
+        layout_key=layout.key, layout_version=layout.version,
+        theme_schema_version=theme.schema_version, theme_hash=hash_resolved_catalog_theme(theme), theme_data=theme,
+        cover_schema_version=cover.schema_version, cover_hash=hash_resolved_catalog_cover(cover), cover_data=cover,
+        closing_schema_version=closing.schema_version, closing_hash=hash_resolved_catalog_closing(closing), closing_data=closing,
+    )
+    return enqueue_job(
+        session, job_type=CATALOG_RENDER_JOB_TYPE_V5,
+        payload=payload.model_dump(mode="json"),
+        idempotency_key=build_catalog_render_idempotency_key(payload, job_type=CATALOG_RENDER_JOB_TYPE_V5),
+        max_attempts=max_attempts,
+    )
+
+
 def enqueue_catalog_render(
     session: Session,
     *,
@@ -442,7 +506,7 @@ def enqueue_catalog_render(
 def create_running_catalog_render_run(
     session: Session,
     *,
-    payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2 | CatalogRenderJobPayloadV3 | CatalogRenderJobPayloadV4,
+    payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2 | CatalogRenderJobPayloadV3 | CatalogRenderJobPayloadV4 | CatalogRenderJobPayloadV5,
     job_id: uuid.UUID | None = None,
     started_at: datetime | None = None,
 ) -> tuple[CatalogRenderRun, CatalogSnapshotData]:
@@ -467,7 +531,7 @@ def create_running_catalog_render_run(
     job = None
     if job_id is not None:
         job = session.get(Job, job_id)
-        expected_type = CATALOG_RENDER_JOB_TYPE_V4 if isinstance(payload, CatalogRenderJobPayloadV4) else CATALOG_RENDER_JOB_TYPE_V3 if isinstance(payload, CatalogRenderJobPayloadV3) else CATALOG_RENDER_JOB_TYPE_V2 if isinstance(payload, CatalogRenderJobPayloadV2) else CATALOG_RENDER_JOB_TYPE
+        expected_type = CATALOG_RENDER_JOB_TYPE_V5 if isinstance(payload, CatalogRenderJobPayloadV5) else CATALOG_RENDER_JOB_TYPE_V4 if isinstance(payload, CatalogRenderJobPayloadV4) else CATALOG_RENDER_JOB_TYPE_V3 if isinstance(payload, CatalogRenderJobPayloadV3) else CATALOG_RENDER_JOB_TYPE_V2 if isinstance(payload, CatalogRenderJobPayloadV2) else CATALOG_RENDER_JOB_TYPE
         if job is None or job.job_type != expected_type:
             raise InvalidCatalogRenderJobError(
                 f"job must exist with type {expected_type}"
@@ -492,6 +556,12 @@ def create_running_catalog_render_run(
             resolve_catalog_cover_definition(cover.cover_key or "", cover.cover_version or "")
         if hash_resolved_catalog_cover(cover) != payload.cover_hash.lower():
             raise InvalidCatalogRenderJobError("frozen cover payload hash mismatch")
+    if isinstance(payload, CatalogRenderJobPayloadV5):
+        closing = payload.closing_data
+        if closing.enabled:
+            resolve_catalog_closing_definition(closing.closing_key or "", closing.closing_version or "")
+        if hash_resolved_catalog_closing(closing) != payload.closing_hash.lower():
+            raise InvalidCatalogRenderJobError("frozen closing payload hash mismatch")
     run = CatalogRenderRun(
         catalog_snapshot=snapshot,
         job=job,
@@ -515,6 +585,9 @@ def create_running_catalog_render_run(
         cover_schema_version=(payload.cover_schema_version if isinstance(payload, CatalogRenderJobPayloadV4) else None),
         cover_hash=(payload.cover_hash.lower() if isinstance(payload, CatalogRenderJobPayloadV4) else None),
         cover_data=(payload.cover_data.model_dump(mode="json") if isinstance(payload, CatalogRenderJobPayloadV4) else None),
+        closing_schema_version=(payload.closing_schema_version if isinstance(payload, CatalogRenderJobPayloadV5) else None),
+        closing_hash=(payload.closing_hash.lower() if isinstance(payload, CatalogRenderJobPayloadV5) else None),
+        closing_data=(payload.closing_data.model_dump(mode="json") if isinstance(payload, CatalogRenderJobPayloadV5) else None),
         status=ExtractionRunStatus.RUNNING,
         started_at=started_at or utc_now(),
     )
@@ -586,6 +659,7 @@ def build_catalog_render_view_model(
     branding: ResolvedCatalogBranding | None = None,
     theme: ResolvedCatalogTheme | None = None,
     cover: ResolvedCatalogCover | None = None,
+    closing: ResolvedCatalogClosing | None = None,
 ) -> CatalogRenderViewModel:
     layout = resolve_catalog_render_layout(config, require_registered_geometry=False)
     babel_locale = config.locale.replace("-", "_")
@@ -640,6 +714,8 @@ def build_catalog_render_view_model(
         cover_hero_data_uri=(f"data:{cover.hero.mime_type};base64," + base64.b64encode(
             load_frozen_catalog_cover_hero(cover.hero, storage_root=storage_root)
         ).decode("ascii")) if cover and cover.hero else None,
+        closing=closing,
+        closing_qr_data_uri=closing_qr_data_uri(closing) if closing else None,
         layout=CatalogRenderLayoutView(
             key=layout.key,
             version=layout.version,
@@ -749,6 +825,8 @@ def render_catalog_html(
             stylesheet += "\n" + template.theme_css_path.read_text(encoding="utf-8")
         if template.cover_css_path is not None:
             stylesheet += "\n" + template.cover_css_path.read_text(encoding="utf-8")
+        if template.closing_css_path is not None:
+            stylesheet += "\n" + template.closing_css_path.read_text(encoding="utf-8")
     except OSError:
         raise InvalidCatalogTemplateError(
             "catalog template could not be read"
@@ -770,7 +848,14 @@ def render_catalog_html(
         )
     except Exception:
         raise InvalidCatalogTemplateError("catalog template rendering failed") from None
-    if _contains_external_dependency(html):
+    # v5 may contain clickable, validated contacts, but resource attributes
+    # remain limited to embedded images. This check also covers rendered values.
+    if template.closing_css_path is not None:
+        if _has_unsafe_rendered_resource(html, view_model.closing):
+            raise InvalidCatalogTemplateError(
+                "rendered catalog contains an external or filesystem dependency"
+            )
+    elif _contains_external_dependency(html):
         raise InvalidCatalogTemplateError(
             "rendered catalog contains an external or filesystem dependency"
         )
@@ -842,6 +927,27 @@ def _contains_external_dependency(content: str) -> bool:
         marker in lowered
         for marker in ("http://", "https://", "file://", "url(")
     )
+
+
+def _has_unsafe_rendered_resource(html: str, closing: ResolvedCatalogClosing | None) -> bool:
+    allowed_links = {item.href for item in closing.contacts if item.href} if closing else set()
+
+    class ResourceAudit(HTMLParser):
+        unsafe = False
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            for name, value in attrs:
+                value = value or ""
+                if name in ("src", "poster", "data", "srcset") and not value.startswith("data:image/"):
+                    self.unsafe = True
+                elif name == "href" and (tag != "a" or value not in allowed_links):
+                    self.unsafe = True
+                elif name == "style" and _contains_external_dependency(value):
+                    self.unsafe = True
+
+    audit = ResourceAudit()
+    audit.feed(html)
+    return audit.unsafe
 
 
 def _require_running(run: CatalogRenderRun) -> None:

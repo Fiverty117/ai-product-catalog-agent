@@ -51,7 +51,8 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "sku_field_provenance",
     }
     render_columns = {column["name"]: column for column in inspect(engine).get_columns("catalog_render_runs")}
-    for name in ("cover_schema_version", "cover_hash", "cover_data"):
+    for name in ("cover_schema_version", "cover_hash", "cover_data",
+                 "closing_schema_version", "closing_hash", "closing_data"):
         assert render_columns[name]["nullable"] is True
     engine.dispose()
     command.check(config)

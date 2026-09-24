@@ -8,6 +8,7 @@ import type {
   CatalogLayout,
   CatalogTheme,
   CatalogCoverLayout,
+  CatalogClosingLayout,
   ProductCopyEditorialSummary,
   ProductSummary,
 } from "./api";
@@ -18,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchLayouts: vi.fn(),
   fetchThemes: vi.fn(),
   fetchCoverLayouts: vi.fn(),
+  fetchClosingLayouts: vi.fn(),
   uploadCatalogCoverAsset: vi.fn(),
   fetchProductCopyEditorial: vi.fn(),
   generateProductCopy: vi.fn(),
@@ -58,9 +60,14 @@ const coverLayouts: CatalogCoverLayout[] = [
   { key: "editorial", version: "1", display_name: "Editorial", description: "Structured and expressive", requires_hero: false },
   { key: "hero", version: "1", display_name: "Hero", description: "Image-led presentation", requires_hero: true },
 ];
+const closingLayouts: CatalogClosingLayout[] = [
+  { key: "minimal", version: "1", display_name: "Minimal", description: "Quiet publisher sign-off", requires_contact: false },
+  { key: "contact", version: "1", display_name: "Contact", description: "Structured contact information", requires_contact: false },
+  { key: "order", version: "1", display_name: "Order", description: "Ordering-focused final page", requires_contact: true },
+];
 
 const profiles: BrandProfile[] = [
-  { id: "brand-1", key: "grabelan", display_name: "Grabelan Natural Market", logo_url: null, primary_color: "#183D2F", accent_color: "#C89B3C" },
+  { id: "brand-1", key: "grabelan", display_name: "Grabelan Natural Market", logo_url: null, primary_color: "#183D2F", accent_color: "#C89B3C", contact_text: "Atención comercial", social_handle: null },
   { id: "brand-2", key: "secondary", display_name: "Secondary Brand", logo_url: null, primary_color: "#223344", accent_color: "#556677" },
 ];
 
@@ -156,6 +163,7 @@ beforeEach(() => {
   apiMocks.fetchLayouts.mockResolvedValue(layouts);
   apiMocks.fetchThemes.mockResolvedValue(themes);
   apiMocks.fetchCoverLayouts.mockResolvedValue(coverLayouts);
+  apiMocks.fetchClosingLayouts.mockResolvedValue(closingLayouts);
   apiMocks.uploadCatalogCoverAsset.mockReset();
   apiMocks.fetchProducts.mockImplementation((search: string) => Promise.resolve({
     currency: "PYG",
@@ -273,7 +281,73 @@ describe("CatalogBuilderPage", () => {
     await user.click(within(card).getByRole("checkbox"));
     await user.click(screen.getByRole("button", { name: "Create catalog" }));
     expect(apiMocks.createCatalogBuild.mock.calls[0][0].cover).toEqual({ enabled: false });
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0].closing).toEqual({ enabled: false });
   });
+
+  it("validates closing contacts and QR, freezes the submitted choice, and keeps the active result", async () => {
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("queued", {
+      closing_enabled: true, closing_key: "order", closing_display_label: "Order",
+      closing_contacts: [{ kind: "publisher_contact", value: "Atención comercial", href: null },
+        { kind: "whatsapp", value: "+595 981 123456", href: "https://wa.me/595981123456" }],
+      closing_qr_enabled: true, closing_qr_target_type: "whatsapp",
+    }));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    expect(apiMocks.fetchClosingLayouts).toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: "Include closing page" }));
+    await user.click(within(screen.getByRole("group", { name: "Closing style" })).getByRole("radio", { name: /Order/ }));
+    expect(screen.getByText("From publisher: Atención comercial")).toBeVisible();
+    await user.click(screen.getByRole("checkbox", { name: "WhatsApp" }));
+    await user.type(screen.getByRole("textbox", { name: "WhatsApp value" }), "0981 123456");
+    await user.click(screen.getByRole("checkbox", { name: "Include QR code" }));
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    await user.clear(screen.getByRole("textbox", { name: "WhatsApp value" }));
+    await user.type(screen.getByRole("textbox", { name: "WhatsApp value" }), "+595 981 123456");
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0].closing).toEqual(expect.objectContaining({
+      enabled: true, closing_key: "order", closing_version: "1", heading: "Hacé tu pedido",
+      publisher_contact: { enabled: true }, whatsapp: { enabled: true, override: "+595 981 123456" },
+      qr: { enabled: true, target_type: "whatsapp" },
+    }));
+    await user.click(screen.getByRole("button", { name: "Reset closing" }));
+    expect(screen.getByRole("checkbox", { name: "Include closing page" })).not.toBeChecked();
+    expect(screen.getByText(/Closing: Order · Publisher contact, WhatsApp · QR: whatsapp/)).toBeVisible();
+  }, 15000);
+
+  it("supports Build-only publisher override and validates Website or custom QR URLs", async () => {
+    const user = userEvent.setup();
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("queued"));
+    render(<CatalogBuilderPage />);
+    const card = (await screen.findByRole("heading", { name: "Premium Whey" })).closest("article")!;
+    await user.click(within(card).getByRole("checkbox"));
+    await user.click(screen.getByRole("checkbox", { name: "Include closing page" }));
+    await user.click(within(screen.getByRole("group", { name: "Closing style" })).getByRole("radio", { name: /Minimal/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Override for this build" }));
+    await user.type(screen.getByRole("textbox", { name: "Publisher contact value" }), "Ventas de edición");
+    await user.type(screen.getByRole("textbox", { name: "Short note (optional)" }), "Consulta previa.");
+    await user.click(screen.getByRole("checkbox", { name: "Include QR code" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "QR destination" }), "custom_url");
+    await user.type(screen.getByRole("textbox", { name: "Custom QR URL" }), "javascript:bad");
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    await user.clear(screen.getByRole("textbox", { name: "Custom QR URL" }));
+    await user.type(screen.getByRole("textbox", { name: "Custom QR URL" }), "https://example.com/order");
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeEnabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "QR destination" }), "website");
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "Website" }));
+    await user.type(screen.getByRole("textbox", { name: "Website value" }), "https://example.com");
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    expect(apiMocks.createCatalogBuild.mock.calls[0][0].closing).toEqual(expect.objectContaining({
+      closing_key: "minimal", note: "Consulta previa.",
+      publisher_contact: { enabled: true, override: "Ventas de edición" },
+      website: { enabled: true, override: "https://example.com" },
+      qr: { enabled: true, target_type: "website" },
+    }));
+  }, 15000);
 
   it("validates cover text and freezes edition while controls change", async () => {
     const user = userEvent.setup();

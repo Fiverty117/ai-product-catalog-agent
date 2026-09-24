@@ -1,0 +1,69 @@
+/* v5-only closing page. Every selector is scoped away from Product and Cover pages. */
+.catalog-closing {
+  background: var(--surface-subtle);
+  break-before: page;
+  page-break-before: always;
+  break-inside: avoid;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  height: 270mm;
+  overflow: hidden;
+  padding: 16mm;
+}
+.catalog-closing .closing-brand { flex: 0 0 auto; }
+.catalog-closing .closing-logo { display: block; max-height: 25mm; max-width: 65mm; object-fit: contain; margin: 0 0 5mm; }
+.catalog-closing .closing-publisher { color: var(--brand-primary); font-size: 11.5pt; font-weight: 700; letter-spacing: .065em; line-height: 1.28; margin: 0; overflow-wrap: anywhere; text-transform: uppercase; }
+.catalog-closing .closing-content { margin: auto 0; min-width: 0; }
+.catalog-closing .closing-heading { font-size: 39pt; font-weight: 700; letter-spacing: -.03em; line-height: 1.07; margin: 0; overflow-wrap: anywhere; }
+.catalog-closing .closing-accent { background: var(--brand-accent); height: 1.2mm; margin: 7mm 0 9mm; width: 42mm; }
+.catalog-closing .closing-details { align-items: start; display: grid; gap: 11mm; grid-template-columns: minmax(0, 1fr) auto; }
+.catalog-closing .closing-contacts { display: grid; gap: 6mm 9mm; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; min-width: 0; }
+.catalog-closing .closing-contact-item { break-inside: avoid; min-width: 0; }
+.catalog-closing .closing-contact-label { color: var(--brand-primary); font-size: 8.5pt; font-weight: 700; letter-spacing: .08em; line-height: 1.25; margin: 0 0 2mm; text-transform: uppercase; }
+.catalog-closing .closing-contact-value { font-size: 11pt; font-weight: 500; line-height: 1.35; margin: 0; overflow-wrap: anywhere; }
+.catalog-closing .closing-contact-value a { color: inherit; text-decoration-color: var(--brand-accent); text-decoration-thickness: .7px; text-underline-offset: 1.5mm; }
+.catalog-closing .closing-qr { align-items: center; background: #ffffff; border: 1px solid var(--border); display: flex; flex-direction: column; padding: 3mm; width: 51mm; }
+.catalog-closing .closing-qr img { display: block; height: 43mm; width: 43mm; }
+.catalog-closing .closing-qr span { color: var(--text-secondary); font-size: 8pt; letter-spacing: .08em; margin-top: 1mm; }
+.catalog-closing .closing-qr p { color: var(--text-secondary); font-size: 8pt; line-height: 1.25; margin: 1mm 0 0; max-width: 100%; overflow-wrap: anywhere; text-align: center; }
+.catalog-closing .closing-note { border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 10pt; line-height: 1.4; margin: 11mm 0 0; max-width: 145mm; overflow-wrap: anywhere; padding-top: 5mm; }
+
+.catalog-closing.closing-minimal { background: var(--page-bg); border-top: 2mm solid var(--brand-primary); }
+.catalog-closing.closing-minimal .closing-content { margin-bottom: 42mm; max-width: 145mm; }
+.catalog-closing.closing-minimal .closing-contacts { grid-template-columns: 1fr; }
+.catalog-closing.closing-minimal .closing-contact-item { max-width: 125mm; }
+.catalog-closing.closing-minimal .closing-details { gap: 9mm; }
+
+.catalog-closing.closing-contact .closing-content { margin-bottom: 28mm; }
+.catalog-closing.closing-contact .closing-heading { font-size: 36pt; }
+
+.catalog-closing.closing-order { border-left: 4mm solid var(--brand-primary); }
+.catalog-closing.closing-order .closing-content { margin-bottom: 30mm; }
+.catalog-closing.closing-order .closing-heading { font-size: 43pt; max-width: 155mm; }
+.catalog-closing.closing-order .closing-accent { height: 2mm; width: 54mm; }
+.catalog-closing.closing-order .closing-contact-whatsapp .closing-contact-value,
+.catalog-closing.closing-order .closing-contact-phone .closing-contact-value { font-size: 14pt; font-weight: 700; }
+
+/* With no QR, the CTA has its own vertical rhythm; the QR grid remains unchanged. */
+.catalog-closing.closing--without-qr .closing-details { grid-template-columns: minmax(0, 1fr); }
+.catalog-closing.closing--single-contact .closing-contacts { grid-template-columns: minmax(0, 1fr); max-width: 125mm; }
+.catalog-closing.closing--without-qr:not(.closing-dense) .closing-content { margin-bottom: 55mm; }
+.catalog-closing.closing-minimal.closing--without-qr:not(.closing-dense) .closing-content { margin-bottom: 66mm; }
+
+/* Dense content uses only Closing-specific compression to keep the note printable. */
+.catalog-closing.closing-dense .closing-content { margin-bottom: 0; }
+.catalog-closing.closing-dense .closing-heading { font-size: 30pt; line-height: 1.04; }
+.catalog-closing.closing-dense .closing-accent { margin: 4mm 0 5mm; }
+.catalog-closing.closing-dense .closing-contacts { gap: 3mm 7mm; }
+.catalog-closing.closing-dense .closing-contact-value { font-size: 9.5pt; line-height: 1.26; }
+.catalog-closing.closing-dense .closing-contact-label { margin-bottom: 1mm; }
+.catalog-closing.closing-dense .closing-qr { width: 46mm; }
+.catalog-closing.closing-dense .closing-qr img { height: 39mm; width: 39mm; }
+.catalog-closing.closing-dense .closing-note { font-size: 9.5pt; line-height: 1.28; margin-top: 5mm; padding-top: 3mm; }
+
+.theme-premium .catalog-closing .closing-heading { font-family: Georgia, "Times New Roman", serif; font-weight: 500; }
+.theme-organic .catalog-closing { border-radius: 5mm; }
+.theme-organic .catalog-closing .closing-qr { border-radius: 3mm; }
+.theme-bold .catalog-closing .closing-accent { height: 3mm; width: 60mm; }
+.theme-bold .catalog-closing .closing-heading { font-weight: 800; }

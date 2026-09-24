@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db.models import CatalogRenderRun
-from app.domain.schemas import CatalogRenderJobPayload, CatalogRenderJobPayloadV2, CatalogRenderJobPayloadV3, CatalogRenderJobPayloadV4, CatalogSnapshotData
+from app.domain.schemas import CatalogRenderJobPayload, CatalogRenderJobPayloadV2, CatalogRenderJobPayloadV3, CatalogRenderJobPayloadV4, CatalogRenderJobPayloadV5, CatalogSnapshotData
 from app.rendering.catalog_pdf import (
     CatalogPdfRenderer,
     RetryableCatalogRendererError,
@@ -17,6 +17,7 @@ from app.services.catalog_rendering import (
     CATALOG_RENDER_JOB_TYPE_V2,
     CATALOG_RENDER_JOB_TYPE_V3,
     CATALOG_RENDER_JOB_TYPE_V4,
+    CATALOG_RENDER_JOB_TYPE_V5,
     DEFAULT_CATALOGS_DIR,
     DEFAULT_STORAGE_ROOT,
     DEFAULT_TEMPLATE_ROOT,
@@ -36,6 +37,7 @@ from app.services.catalog_rendering import (
 from app.services.catalog_branding import CatalogBrandingError, hash_resolved_catalog_branding
 from app.rendering.catalog_themes import UnknownCatalogThemeError, hash_resolved_catalog_theme, resolve_catalog_theme_definition
 from app.rendering.catalog_covers import UnknownCatalogCoverError, hash_resolved_catalog_cover, resolve_catalog_cover_definition
+from app.rendering.catalog_closings import CatalogClosingError, UnknownCatalogClosingError, hash_resolved_catalog_closing, resolve_catalog_closing_definition
 from app.services.catalog_cover_assets import CatalogCoverAssetError
 from app.services.jobs import PermanentJobError
 from app.workers.job_worker import ClaimedJob
@@ -77,6 +79,7 @@ class CatalogRenderJobHandler:
                 branding=payload.branding_data if isinstance(payload, CatalogRenderJobPayloadV2) else None,
                 theme=payload.theme_data if isinstance(payload, CatalogRenderJobPayloadV3) else None,
                 cover=payload.cover_data if isinstance(payload, CatalogRenderJobPayloadV4) else None,
+                closing=payload.closing_data if isinstance(payload, CatalogRenderJobPayloadV5) else None,
             )
             if hash_catalog_template(template) != payload.template_hash.lower():
                 raise InvalidCatalogRenderJobError(
@@ -112,12 +115,12 @@ class CatalogRenderJobHandler:
             raise error from None
 
     def _validate_payload(self, claimed: ClaimedJob):
-        if claimed.job_type not in (CATALOG_RENDER_JOB_TYPE, CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3, CATALOG_RENDER_JOB_TYPE_V4):
+        if claimed.job_type not in (CATALOG_RENDER_JOB_TYPE, CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3, CATALOG_RENDER_JOB_TYPE_V4, CATALOG_RENDER_JOB_TYPE_V5):
             raise PermanentCatalogRenderError(
                 "handler requires a supported catalog render job type"
             )
         try:
-            payload_type = CatalogRenderJobPayloadV4 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V4 else CatalogRenderJobPayloadV3 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V3 else CatalogRenderJobPayloadV2 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V2 else CatalogRenderJobPayload
+            payload_type = CatalogRenderJobPayloadV5 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V5 else CatalogRenderJobPayloadV4 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V4 else CatalogRenderJobPayloadV3 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V3 else CatalogRenderJobPayloadV2 if claimed.job_type == CATALOG_RENDER_JOB_TYPE_V2 else CatalogRenderJobPayload
             payload = payload_type.model_validate(claimed.payload)
             normalized_config = normalize_catalog_render_config(payload.config)
             template = resolve_catalog_template(
@@ -154,12 +157,20 @@ class CatalogRenderJobHandler:
                 raise PermanentCatalogRenderError("frozen catalog cover is no longer supported") from None
             if hash_resolved_catalog_cover(payload.cover_data) != payload.cover_hash.lower():
                 raise PermanentCatalogRenderError("frozen cover payload hash mismatch")
+        if isinstance(payload, CatalogRenderJobPayloadV5):
+            try:
+                if payload.closing_data.enabled:
+                    resolve_catalog_closing_definition(payload.closing_data.closing_key or "", payload.closing_data.closing_version or "")
+            except UnknownCatalogClosingError:
+                raise PermanentCatalogRenderError("frozen catalog closing is no longer supported") from None
+            if hash_resolved_catalog_closing(payload.closing_data) != payload.closing_hash.lower():
+                raise PermanentCatalogRenderError("frozen closing payload hash mismatch")
         return payload, template
 
     def _prepare_attempt(
         self,
         claimed: ClaimedJob,
-        payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2 | CatalogRenderJobPayloadV3 | CatalogRenderJobPayloadV4,
+        payload: CatalogRenderJobPayload | CatalogRenderJobPayloadV2 | CatalogRenderJobPayloadV3 | CatalogRenderJobPayloadV4 | CatalogRenderJobPayloadV5,
     ) -> tuple[uuid.UUID, CatalogSnapshotData]:
         with self._session_factory() as session:
             try:
@@ -186,7 +197,7 @@ def catalog_render_handlers(
     **handler_options,
 ) -> dict[str, CatalogRenderJobHandler]:
     handler = CatalogRenderJobHandler(session_factory, renderer, **handler_options)
-    return {CATALOG_RENDER_JOB_TYPE: handler, CATALOG_RENDER_JOB_TYPE_V2: handler, CATALOG_RENDER_JOB_TYPE_V3: handler, CATALOG_RENDER_JOB_TYPE_V4: handler}
+    return {CATALOG_RENDER_JOB_TYPE: handler, CATALOG_RENDER_JOB_TYPE_V2: handler, CATALOG_RENDER_JOB_TYPE_V3: handler, CATALOG_RENDER_JOB_TYPE_V4: handler, CATALOG_RENDER_JOB_TYPE_V5: handler}
 
 
 def _safe_render_error(error: Exception) -> Exception:
@@ -197,6 +208,8 @@ def _safe_render_error(error: Exception) -> Exception:
     if isinstance(error, CatalogBrandingError):
         return PermanentCatalogRenderError(str(error))
     if isinstance(error, CatalogCoverAssetError):
+        return PermanentCatalogRenderError(str(error))
+    if isinstance(error, CatalogClosingError):
         return PermanentCatalogRenderError(str(error))
     if isinstance(error, CatalogPdfStorageError):
         return RetryableCatalogRendererError("catalog PDF storage failed")

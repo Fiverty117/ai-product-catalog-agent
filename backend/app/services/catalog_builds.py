@@ -22,8 +22,11 @@ from app.domain.schemas import (
     CatalogRenderJobPayloadV2,
     CatalogRenderJobPayloadV3,
     CatalogRenderJobPayloadV4,
+    CatalogRenderJobPayloadV5,
+    CatalogCoverCreate,
 )
 from app.rendering.catalog_covers import resolve_catalog_cover_definition
+from app.rendering.catalog_closings import resolve_catalog_closing_definition
 from app.rendering.catalog_themes import resolve_catalog_theme_definition
 from app.rendering.catalog_layouts import (
     UnknownCatalogLayoutError,
@@ -36,9 +39,11 @@ from app.services.catalog_rendering import (
     CATALOG_RENDER_JOB_TYPE_V2,
     CATALOG_RENDER_JOB_TYPE_V3,
     CATALOG_RENDER_JOB_TYPE_V4,
+    CATALOG_RENDER_JOB_TYPE_V5,
     enqueue_catalog_render_v2,
     enqueue_catalog_render_v3,
     enqueue_catalog_render_v4,
+    enqueue_catalog_render_v5,
     validate_catalog_pdf,
 )
 from app.services.catalog_snapshots import (
@@ -121,7 +126,19 @@ def create_catalog_build(
             storage_root=storage_root,
             clock=clock,
         )
-        if request.theme_key is None:
+        if request.closing is not None:
+            job = enqueue_catalog_render_v5(
+                session, catalog_snapshot_id=snapshot.id,
+                brand_profile_id=request.catalog_brand_profile_id,
+                theme_key=request.theme_key, theme_version=request.theme_version,
+                primary_color_override=request.primary_color_override,
+                accent_color_override=request.accent_color_override,
+                cover_choice=request.cover or CatalogCoverCreate(enabled=False),
+                closing_choice=request.closing,
+                config=CatalogRenderConfig(layout=layout.key, template_key="grabelan-catalog-v4"),
+                storage_root=storage_root, template_root=template_root,
+            )
+        elif request.theme_key is None:
             job = enqueue_catalog_render_v2(
                 session, catalog_snapshot_id=snapshot.id,
                 brand_profile_id=request.catalog_brand_profile_id,
@@ -175,10 +192,10 @@ def get_catalog_build(session: Session, build_id: uuid.UUID) -> CatalogBuildRead
     if build is None:
         raise UnknownCatalogBuildError(f"Catalog build not found: {build_id}")
     job = build.job
-    if job is None or job.job_type not in (CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3, CATALOG_RENDER_JOB_TYPE_V4):
+    if job is None or job.job_type not in (CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3, CATALOG_RENDER_JOB_TYPE_V4, CATALOG_RENDER_JOB_TYPE_V5):
         raise CatalogBuildIntegrityError("Catalog build render Job is invalid")
     try:
-        payload = (CatalogRenderJobPayloadV4 if job.job_type == CATALOG_RENDER_JOB_TYPE_V4 else CatalogRenderJobPayloadV3 if job.job_type == CATALOG_RENDER_JOB_TYPE_V3 else CatalogRenderJobPayloadV2).model_validate(job.payload)
+        payload = (CatalogRenderJobPayloadV5 if job.job_type == CATALOG_RENDER_JOB_TYPE_V5 else CatalogRenderJobPayloadV4 if job.job_type == CATALOG_RENDER_JOB_TYPE_V4 else CatalogRenderJobPayloadV3 if job.job_type == CATALOG_RENDER_JOB_TYPE_V3 else CatalogRenderJobPayloadV2).model_validate(job.payload)
     except ValidationError:
         raise CatalogBuildIntegrityError("Catalog build render configuration is invalid") from None
     if payload.catalog_snapshot_id != build.catalog_snapshot_id:
@@ -231,6 +248,17 @@ def get_catalog_build(session: Session, build_id: uuid.UUID) -> CatalogBuildRead
         cover_edition_label=payload.cover_data.edition_label if isinstance(payload, CatalogRenderJobPayloadV4) else None,
         cover_show_publisher_logo=payload.cover_data.show_publisher_logo if isinstance(payload, CatalogRenderJobPayloadV4) else False,
         cover_hero_present=payload.cover_data.hero is not None if isinstance(payload, CatalogRenderJobPayloadV4) else False,
+        closing_enabled=payload.closing_data.enabled if isinstance(payload, CatalogRenderJobPayloadV5) else False,
+        closing_key=payload.closing_data.closing_key if isinstance(payload, CatalogRenderJobPayloadV5) else None,
+        closing_version=payload.closing_data.closing_version if isinstance(payload, CatalogRenderJobPayloadV5) else None,
+        closing_display_label=(resolve_catalog_closing_definition(payload.closing_data.closing_key, payload.closing_data.closing_version).display_name
+            if isinstance(payload, CatalogRenderJobPayloadV5) and payload.closing_data.enabled else "None"),
+        closing_heading=payload.closing_data.heading if isinstance(payload, CatalogRenderJobPayloadV5) else None,
+        closing_note=payload.closing_data.note if isinstance(payload, CatalogRenderJobPayloadV5) else None,
+        closing_show_publisher_logo=payload.closing_data.show_publisher_logo if isinstance(payload, CatalogRenderJobPayloadV5) else False,
+        closing_contacts=payload.closing_data.contacts if isinstance(payload, CatalogRenderJobPayloadV5) else [],
+        closing_qr_enabled=payload.closing_data.qr_enabled if isinstance(payload, CatalogRenderJobPayloadV5) else False,
+        closing_qr_target_type=payload.closing_data.qr_target_type if isinstance(payload, CatalogRenderJobPayloadV5) else None,
         created_at=build.created_at,
         error=(
             _public_render_error(latest_run.sanitized_error if latest_run else None)
@@ -270,7 +298,7 @@ def resolve_catalog_build_artifact_pdf(
         or run.status is not ExtractionRunStatus.SUCCEEDED
         or run.job_id is None
         or run.job is None
-        or run.job.job_type not in (CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3, CATALOG_RENDER_JOB_TYPE_V4)
+        or run.job.job_type not in (CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3, CATALOG_RENDER_JOB_TYPE_V4, CATALOG_RENDER_JOB_TYPE_V5)
         or run.job.catalog_build is None
         or run.job.catalog_build.catalog_snapshot_id != artifact.catalog_snapshot_id
         or artifact.catalog_snapshot_id != run.catalog_snapshot_id
@@ -321,6 +349,8 @@ def hash_catalog_build_request(request: CatalogBuildCreate) -> str:
         })
     if request.cover is not None:
         identity["cover"] = request.cover.model_dump(mode="json", exclude_none=True)
+    if request.closing is not None:
+        identity["closing"] = request.closing.model_dump(mode="json", exclude_none=True)
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

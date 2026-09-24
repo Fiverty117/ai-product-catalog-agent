@@ -55,6 +55,8 @@ export type BrandProfile = {
   logo_url: string | null;
   primary_color: string;
   accent_color: string;
+  contact_text?: string | null;
+  social_handle?: string | null;
 };
 
 export type CatalogLayout = {
@@ -79,6 +81,32 @@ export type CatalogCoverLayout = {
   display_name: string;
   description: string;
   requires_hero: boolean;
+};
+
+export type CatalogClosingLayout = {
+  key: "minimal" | "contact" | "order";
+  version: string;
+  display_name: string;
+  description: string;
+  requires_contact: boolean;
+};
+
+export type CatalogClosingContactChoice = { enabled: boolean; override?: string | null };
+export type CatalogClosingInput = { enabled: false } | {
+  enabled: true;
+  closing_key: CatalogClosingLayout["key"];
+  closing_version: string;
+  heading?: string;
+  note?: string;
+  show_publisher_logo: boolean;
+  publisher_contact: CatalogClosingContactChoice;
+  publisher_social: CatalogClosingContactChoice;
+  whatsapp: CatalogClosingContactChoice;
+  phone: CatalogClosingContactChoice;
+  instagram: CatalogClosingContactChoice;
+  website: CatalogClosingContactChoice;
+  address: CatalogClosingContactChoice;
+  qr: { enabled: false } | { enabled: true; target_type: "whatsapp" | "website" | "custom_url"; custom_url?: string };
 };
 
 export type CatalogCoverAsset = {
@@ -127,6 +155,16 @@ export type CatalogBuild = {
   cover_edition_label?: string | null;
   cover_show_publisher_logo?: boolean;
   cover_hero_present?: boolean;
+  closing_enabled?: boolean;
+  closing_key?: CatalogClosingLayout["key"] | null;
+  closing_version?: string | null;
+  closing_display_label?: string;
+  closing_heading?: string | null;
+  closing_note?: string | null;
+  closing_show_publisher_logo?: boolean;
+  closing_contacts?: Array<{ kind: string; value: string; href: string | null }>;
+  closing_qr_enabled?: boolean;
+  closing_qr_target_type?: "whatsapp" | "website" | "custom_url" | null;
   created_at: string;
   error: string | null;
   can_retry: boolean;
@@ -392,6 +430,10 @@ export function fetchCoverLayouts(signal?: AbortSignal): Promise<CatalogCoverLay
   return getJson<CatalogCoverLayout[]>("/api/catalog-builder/cover-layouts", signal);
 }
 
+export function fetchClosingLayouts(signal?: AbortSignal): Promise<CatalogClosingLayout[]> {
+  return getJson<CatalogClosingLayout[]>("/api/catalog-builder/closing-layouts", signal);
+}
+
 export async function uploadCatalogCoverAsset(image: File): Promise<CatalogCoverAsset> {
   const body = new FormData();
   body.append("image", image);
@@ -413,6 +455,7 @@ export type CatalogBuildInput = {
   primary_color_override?: string;
   accent_color_override?: string;
   cover?: CatalogCoverInput;
+  closing?: CatalogClosingInput;
   currency: string;
   idempotency_key: string;
 };
