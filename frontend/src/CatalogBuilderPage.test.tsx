@@ -153,6 +153,14 @@ beforeEach(() => {
 });
 
 describe("CatalogBuilderPage", () => {
+  it("opens the existing Product editorial drawer from a promoted Intake link", async () => {
+    const productId = "11111111-1111-4111-8111-111111111111";
+    window.history.replaceState({}, "", `/catalog-builder?product=${productId}`);
+    apiMocks.fetchProductCopyEditorial.mockRejectedValue(new Error("fixture unavailable"));
+    render(<CatalogBuilderPage />);
+    await waitFor(() => expect(apiMocks.fetchProductCopyEditorial).toHaveBeenCalledWith(productId, expect.anything()));
+  });
+
   it("shows an explicit initial loading state", () => {
     apiMocks.fetchProducts.mockReturnValue(new Promise(() => undefined));
     render(<CatalogBuilderPage />);

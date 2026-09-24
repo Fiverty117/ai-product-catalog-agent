@@ -3,13 +3,16 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import {
   ApiError, IntakeDraft, IntakeItem, IntakeSKU, createIntakeItem, fetchIntakeItem,
-  fetchIntakeItems, resolveApiUrl, runIntakeExtraction, saveIntakeDraft,
+  fetchIntakeItems, fetchIntakePromotion, IntakePromotionContext, IntakePromotionResult,
+  resolveApiUrl, runIntakeExtraction, saveIntakeDraft,
   setIntakePrimaryPhoto,
 } from "./api";
+import { IntakePromotionPanel } from "./IntakePromotionPanel";
 
 const labels: Record<IntakeItem["status"], string> = {
   draft: "Draft", queued: "Queued", running: "Extracting",
   review_required: "Review required", failed: "Failed",
+  promoted: "Product created",
 };
 
 function message(error: unknown): string {
@@ -40,6 +43,9 @@ export function ProductIntakePage() {
   const [item, setItem] = useState<IntakeItem | null>(null);
   const [draft, setDraft] = useState<IntakeDraft | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [promotionContext, setPromotionContext] = useState<IntakePromotionContext | null>(null);
+  const [promotionResult, setPromotionResult] = useState<IntakePromotionResult | null>(null);
+  const [showPromotionReview, setShowPromotionReview] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -48,8 +54,10 @@ export function ProductIntakePage() {
 
   const load = useCallback(async (signal?: AbortSignal) => {
     if (intakeId) {
-      const fresh = await fetchIntakeItem(intakeId, signal);
+      const [fresh, context] = await Promise.all([fetchIntakeItem(intakeId, signal), fetchIntakePromotion(intakeId, signal)]);
       setItem(fresh);
+      setPromotionContext(context);
+      setPromotionResult(context.result);
       if (!dirty) setDraft(fresh.draft);
     } else {
       setItems((await fetchIntakeItems(signal)).items);
@@ -139,6 +147,14 @@ export function ProductIntakePage() {
     edit("skus", skus);
   }
 
+  const promoted = item?.status === "promoted";
+  const canPromote = Boolean(item && draft && !promoted && !dirty &&
+    item.status !== "queued" && item.status !== "running" && item.photos.length > 0 &&
+    draft.brand_name?.trim() && draft.product_name?.trim() && draft.skus.length > 0 &&
+    draft.skus.every((sku) => Boolean(sku.flavor || sku.size_value || sku.servings || sku.external_sku)) &&
+    !validateDraft(draft));
+  const created = promotionResult ?? promotionContext?.result;
+
   if (!intakeId) return (
     <main className="intake-shell">
       <header className="intake-header"><div><p className="eyebrow">Workspace</p><h1>Product Intake</h1><p>Collect photos and review product information before creating a canonical product.</p></div><button onClick={() => setShowCreate(true)}>+ New intake</button></header>
@@ -165,17 +181,18 @@ export function ProductIntakePage() {
     {error && <p role="alert" className="intake-error">{error}</p>}
     {!item || !draft ? <p>Loading intake…</p> : <>
       <header className="intake-header"><div><p className="eyebrow">Product Intake</p><h1>{draft.product_name || "Untitled product"}</h1><p>{draft.brand_name || "Brand pending"} · <span className={`intake-status status-${item.status}`}>{labels[item.status]}</span></p></div></header>
-      <section className="intake-panel"><h2>Source photos</h2><p>All source photos are supplied to extraction. The primary photo is used as the workspace thumbnail.</p>
-        <div className="intake-photo-grid">{item.photos.map((photo) => <div className="intake-photo" key={photo.id}><img src={resolveApiUrl(photo.image_url)} alt={photo.original_filename} /><span>{photo.original_filename}</span>{photo.is_primary ? <strong>Primary photo</strong> : <button className="secondary-button" disabled={busy} onClick={() => void selectPrimary(photo.id)}>Set as primary</button>}</div>)}</div>
+      <section className="intake-panel"><h2>Source photos</h2><p>All source photos are supplied to extraction. The primary photo is used as the workspace thumbnail and becomes the canonical front Photo on promotion.</p>
+        <div className="intake-photo-grid">{item.photos.map((photo) => <div className="intake-photo" key={photo.id}><img src={resolveApiUrl(photo.image_url)} alt={photo.original_filename} /><span>{photo.original_filename}</span>{photo.is_primary ? <strong>Primary photo</strong> : !promoted && <button className="secondary-button" disabled={busy} onClick={() => void selectPrimary(photo.id)}>Set as primary</button>}</div>)}</div>
       </section>
       <section className="intake-panel"><h2>Extraction</h2><p>Status: <strong>{labels[item.status]}</strong>{item.extraction.attempts ? ` · Attempt ${item.extraction.attempts}/${item.extraction.max_attempts}` : ""}</p>
         {item.extraction.error && <p role="alert" className="intake-error">{item.extraction.error}</p>}
         {item.extraction.newer_result_available && <p className="intake-notice">A newer extraction is available. Your saved edits were preserved.</p>}
         {item.extraction.run_status === "succeeded" && <p>Latest machine observation is saved separately from this editable draft.</p>}
         {item.extraction.observation && <dl className="intake-observation">{Object.entries(item.extraction.observation).map(([field, observed]) => <div key={field}><dt>{field.replaceAll("_", " ")}</dt><dd>{observed.state === "extracted" ? String(observed.value) : observed.state.replaceAll("_", " ")}</dd></div>)}</dl>}
-        <button onClick={() => void extract()} disabled={busy || !item.photos.length || item.status === "queued" || item.status === "running"}>{busy ? "Please wait…" : "Run extraction"}</button>
+        {!promoted && <button onClick={() => void extract()} disabled={busy || !item.photos.length || item.status === "queued" || item.status === "running"}>{busy ? "Please wait…" : "Run extraction"}</button>}
       </section>
-      <section className="intake-panel"><h2>Draft</h2><p>This working draft does not change canonical products, SKUs, categories or prices.</p>
+      <section className="intake-panel"><h2>Draft</h2><p>{promoted ? "Historical Intake Draft — read-only. It no longer changes the canonical Product." : "This working draft does not change canonical products, SKUs, categories or prices."}</p>
+        <fieldset className="intake-edit-fieldset" disabled={promoted}>
         <div className="intake-fields">
           <label>Brand<input value={draft.brand_name ?? ""} onChange={(event) => edit("brand_name", event.target.value)} /></label>
           <label>Product name<input value={draft.product_name ?? ""} onChange={(event) => edit("product_name", event.target.value)} /></label>
@@ -193,9 +210,20 @@ export function ProductIntakePage() {
         </div>)}
         <button className="secondary-button" onClick={() => edit("skus", [...draft.skus, emptySKU()])}>Add draft variant</button>
         <label className="intake-notes">Notes<textarea value={draft.notes ?? ""} onChange={(event) => edit("notes", event.target.value)} /></label>
-        <div className="intake-actions"><button onClick={() => void save()} disabled={busy || !dirty}>Save draft</button><button className="secondary-button" onClick={() => { setDraft(item.draft); setDirty(false); setError(null); }} disabled={!dirty || busy}>Cancel</button></div>
+        {!promoted && <div className="intake-actions"><button onClick={() => void save()} disabled={busy || !dirty}>Save draft</button><button className="secondary-button" onClick={() => { setDraft(item.draft); setDirty(false); setError(null); }} disabled={!dirty || busy}>Cancel</button></div>}
+        </fieldset>
       </section>
-      <section className="intake-panel intake-next"><h2>Next step</h2><button disabled>Create product</button><p>Canonical product creation will be enabled in the next step.</p></section>
+      <section className="intake-panel intake-next"><h2>{promoted ? "Product created" : "Next step"}</h2>
+        {created ? <><p><strong>{created.brand_name} · {created.product.product_name}</strong> · {created.sku_ids.length} variants</p><p>{created.product.readiness.ready ? "Ready for catalog" : "Not ready for catalog"} ({created.readiness_currency})</p>
+          {!created.product.readiness.ready && <ul>{created.product.readiness.blockers.map((blocker, index) => <li key={`${blocker.code}-${index}`}>{blocker.message}</li>)}</ul>}
+          <div className="intake-actions"><button onClick={() => navigate(`/catalog-builder?product=${created.product_id}`)}>Open product</button><button className="secondary-button" onClick={() => navigate("/catalog-builder")}>Open Catalog Builder</button></div>
+        </> : <><button disabled={!canPromote || busy || !promotionContext} onClick={() => setShowPromotionReview(true)}>Create product</button>
+          <p>{dirty ? "Save the Draft before creating a Product." : !canPromote ? "Complete Brand, Product name and at least one variant to continue." : "Review canonical Categories and optional Prices before confirming."}</p></>}
+      </section>
+      {showPromotionReview && !promoted && promotionContext && <IntakePromotionPanel item={item} context={promotionContext} onCancel={() => setShowPromotionReview(false)} onCreated={(result) => {
+        setPromotionResult(result); setShowPromotionReview(false);
+        void fetchIntakeItem(item.id).then((fresh) => { setItem(fresh); setDraft(fresh.draft); setDirty(false); }).catch((reason) => setError(message(reason)));
+      }} />}
     </>}
   </main>;
 }

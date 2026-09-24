@@ -2,12 +2,12 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.domain.schemas import ProductExtractionResult
+from app.domain.schemas import CatalogBuilderProductSummary, ProductExtractionResult
 
 
 def _optional_text(value: str | None) -> str | None:
@@ -85,13 +85,14 @@ class IntakeExtractionRead(BaseModel):
 
 class ProductIntakeRead(BaseModel):
     id: UUID
-    status: Literal["draft", "queued", "running", "review_required", "failed"]
+    status: Literal["draft", "queued", "running", "review_required", "failed", "promoted"]
     created_at: datetime
     updated_at: datetime
     draft: ProductIntakeDraft
     human_edited: bool
     photos: list[IntakePhotoRead]
     extraction: IntakeExtractionRead
+    promotion: "IntakePromotionLink | None"
 
 
 class ProductIntakeList(BaseModel):
@@ -101,3 +102,65 @@ class ProductIntakeList(BaseModel):
 class PrimaryPhotoRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     photo_id: UUID
+
+
+class IntakePromotionLink(BaseModel):
+    product_id: UUID
+    promoted_at: datetime
+
+
+class PromotionPriceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intake_sku_index: int = Field(ge=0, strict=True)
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=4)
+    currency: str = Field(default="PYG", pattern=r"^[A-Z]{3}$")
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def require_decimal_string(cls, value):
+        if not isinstance(value, str):
+            raise ValueError("price amount must be a decimal string")
+        return value
+
+
+class ProductIntakePromotionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: UUID
+    primary_category_id: UUID | None = None
+    secondary_category_ids: list[UUID] = Field(default_factory=list)
+    sku_prices: list[PromotionPriceInput] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_choices(self):
+        category_ids = ([self.primary_category_id] if self.primary_category_id else []) + self.secondary_category_ids
+        if len(category_ids) != len(set(category_ids)):
+            raise ValueError("category selections must be unique")
+        indices = [price.intake_sku_index for price in self.sku_prices]
+        if len(indices) != len(set(indices)):
+            raise ValueError("one initial price per variant is allowed")
+        return self
+
+
+class PromotionCategoryOption(BaseModel):
+    id: UUID
+    name: str
+
+
+class ProductIntakePromotionResult(BaseModel):
+    status: Literal["promoted"] = "promoted"
+    readiness_currency: Literal["PYG"] = "PYG"
+    intake_id: UUID
+    product_id: UUID
+    brand_id: UUID
+    brand_name: str
+    brand_reused: bool
+    promoted_at: datetime
+    sku_ids: list[UUID]
+    product: CatalogBuilderProductSummary
+
+
+class ProductIntakePromotionContext(BaseModel):
+    categories: list[PromotionCategoryOption]
+    result: ProductIntakePromotionResult | None

@@ -14,7 +14,7 @@ from app.db.models import ExtractionRun, Job, Photo, ProductIntakeItem, ProductI
 from app.db.types import utc_now
 from app.domain.enums import ExtractionRunStatus, JobStatus
 from app.domain.product_intake import (
-    IntakeExtractionRead, IntakePhotoRead, ProductIntakeDraft, ProductIntakeRead, IntakeSKU,
+    IntakeExtractionRead, IntakePhotoRead, IntakePromotionLink, ProductIntakeDraft, ProductIntakeRead, IntakeSKU,
 )
 from app.domain.schemas import ProductExtractionJobPayload, ProductExtractionResult
 from app.services.extraction import PRODUCT_EXTRACTION_JOB_TYPE, PRODUCT_EXTRACTION_SCHEMA_VERSION
@@ -53,6 +53,7 @@ def require_intake(session: Session, intake_id: uuid.UUID) -> ProductIntakeItem:
 
 
 def add_photo(session: Session, item: ProductIntakeItem, *, image_bytes: bytes, filename: str, originals_dir: Path) -> None:
+    _require_not_promoted(item)
     if len(item.photos) >= 12:
         raise IntakeInputError("An intake item supports at most 12 photos.")
     if len(image_bytes) > 20 * 1024 * 1024:
@@ -72,6 +73,7 @@ def add_photo(session: Session, item: ProductIntakeItem, *, image_bytes: bytes, 
 
 
 def set_primary_photo(session: Session, item: ProductIntakeItem, photo_id: uuid.UUID) -> None:
+    _require_not_promoted(item)
     if not any(link.photo_id == photo_id for link in item.photos):
         raise IntakeConflictError("Photo is not attached to this intake item.")
     for link in item.photos:
@@ -81,6 +83,7 @@ def set_primary_photo(session: Session, item: ProductIntakeItem, photo_id: uuid.
 
 
 def save_draft(session: Session, item: ProductIntakeItem, draft: ProductIntakeDraft) -> None:
+    _require_not_promoted(item)
     item.draft = draft.model_dump(mode="json")
     item.human_edited = True
     item.updated_at = utc_now()
@@ -88,6 +91,7 @@ def save_draft(session: Session, item: ProductIntakeItem, draft: ProductIntakeDr
 
 
 def enqueue_extraction(session: Session, item: ProductIntakeItem, action_key: uuid.UUID) -> None:
+    _require_not_promoted(item)
     _refresh_status(session, item)
     key = str(action_key)
     if item.latest_action_key == key:
@@ -142,6 +146,11 @@ def _draft_from_observation(result: ProductExtractionResult) -> ProductIntakeDra
 
 
 def _refresh_status(session: Session, item: ProductIntakeItem) -> None:
+    if item.promotion is not None:
+        if item.status != "promoted":
+            item.status = "promoted"
+            session.flush()
+        return
     if item.latest_job_id is None:
         return
     job = session.get(Job, item.latest_job_id)
@@ -200,6 +209,7 @@ def intake_read(session: Session, item: ProductIntakeItem) -> ProductIntakeRead:
             newer_result_available=bool(run and run.status is ExtractionRunStatus.SUCCEEDED and item.human_edited and item.draft_source_run_id != run.id),
             observation=ProductExtractionResult.model_validate(run.structured_result) if run and run.status is ExtractionRunStatus.SUCCEEDED else None,
         ),
+        promotion=IntakePromotionLink(product_id=item.promotion.product_id, promoted_at=item.promotion.promoted_at) if item.promotion else None,
     )
 
 
@@ -208,7 +218,8 @@ def resolve_intake_photo(session: Session, item: ProductIntakeItem, photo_id: uu
     if link is None:
         raise UnknownIntakeError("Photo not found under this intake item.")
     photo = link.photo
-    if photo.product_id is not None or photo.sku_id is not None or not photo.is_original:
+    allowed_product_id = item.promotion.product_id if item.promotion else None
+    if photo.product_id != allowed_product_id or photo.sku_id is not None or not photo.is_original:
         raise IntakeConflictError("Source photo ownership is invalid for intake.")
     extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(photo.mime_type)
     if extension is None:
@@ -227,3 +238,8 @@ def resolve_intake_photo(session: Session, item: ProductIntakeItem, photo_id: uu
     if (mime, width, height) != (photo.mime_type, photo.width, photo.height):
         raise IntakeAssetError("Source photo failed metadata verification.")
     return path, photo.mime_type
+
+
+def _require_not_promoted(item: ProductIntakeItem) -> None:
+    if item.promotion is not None or item.status == "promoted":
+        raise IntakeConflictError("Promoted intake is read-only.")

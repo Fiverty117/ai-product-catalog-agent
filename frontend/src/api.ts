@@ -422,7 +422,7 @@ export type IntakeDraft = {
 
 export type IntakeItem = {
   id: string;
-  status: "draft" | "queued" | "running" | "review_required" | "failed";
+  status: "draft" | "queued" | "running" | "review_required" | "failed" | "promoted";
   created_at: string;
   updated_at: string;
   draft: IntakeDraft;
@@ -434,7 +434,31 @@ export type IntakeItem = {
     error: string | null; newer_result_available: boolean;
     observation: Record<"brand_name" | "product_name" | "flavor" | "size_value" | "size_unit" | "servings", { value: string | number | null; state: "extracted" | "not_legible" | "not_present" }> | null;
   };
+  promotion: { product_id: string; promoted_at: string } | null;
 };
+
+export type IntakePromotionResult = {
+  status: "promoted"; readiness_currency: "PYG"; intake_id: string; product_id: string;
+  brand_id: string; brand_name: string; brand_reused: boolean;
+  promoted_at: string; sku_ids: string[]; product: ProductSummary;
+};
+
+export type IntakePromotionContext = {
+  categories: { id: string; name: string }[];
+  result: IntakePromotionResult | null;
+};
+
+export type IntakePromotionRequest = {
+  idempotency_key: string;
+  primary_category_id: string | null;
+  secondary_category_ids: string[];
+  sku_prices: { intake_sku_index: number; amount: string; currency: string }[];
+};
+
+export const fetchIntakePromotion = (id: string, signal?: AbortSignal): Promise<IntakePromotionContext> =>
+  getJson(`/api/product-intake/items/${id}/promotion`, signal);
+export const createIntakePromotion = (id: string, request: IntakePromotionRequest): Promise<IntakePromotionResult> =>
+  requestJson(`/api/product-intake/items/${id}/promotion`, { method: "POST", body: JSON.stringify(request) });
 
 export const fetchIntakeItems = (signal?: AbortSignal): Promise<{ items: IntakeItem[] }> =>
   getJson("/api/product-intake/items", signal);

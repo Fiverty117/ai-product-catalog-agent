@@ -1,5 +1,7 @@
 import hashlib
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 
@@ -11,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai.vision import VisionExtractionResponse
 from app.api.photos import get_originals_dir
-from app.db import Base, Brand, Category, ExtractionRun, Job, Photo, Price, Product, ProductCategory, SKU
+from app.db import Base, Brand, CatalogBuild, CatalogSnapshot, Category, ExtractionRun, ImageEnhancementRun, Job, Photo, Price, Product, ProductCategory, ProductCopyRun, ProductIntakePromotion, SKU, SKUFieldProvenance
 from app.db.session import create_sqlite_engine, get_db
 from app.domain.schemas import ProductExtractionResult
 from app.main import app
@@ -200,3 +202,208 @@ def test_worker_failure_is_sanitized_and_new_action_can_retry(store):
         assert session.scalar(select(func.count()).select_from(ExtractionRun)) == 1
         assert session.scalar(select(func.count()).select_from(Job)) == 2
     assert_no_canonical(factory)
+
+
+def reviewed_item(client, *, brand="New Brand", product="Matcha", skus=None):
+    item = make_item(client).json()
+    draft = item["draft"] | {
+        "brand_name": brand, "product_name": product,
+        "primary_category_name": "Suggested category",
+        "skus": skus if skus is not None else [
+            {"flavor": "Plain", "size_value": "1000", "size_unit": "g", "servings": 30, "external_sku": "MATCHA-1"},
+        ],
+    }
+    response = client.put(f"/api/product-intake/items/{item['id']}/draft", json=draft)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def promotion_body(*, category=None, secondary=(), prices=(), key=None):
+    return {
+        "idempotency_key": key or str(uuid.uuid4()),
+        "primary_category_id": category,
+        "secondary_category_ids": list(secondary),
+        "sku_prices": list(prices),
+    }
+
+
+def test_promotion_creates_one_graph_and_retries_idempotently(store):
+    client, factory, originals = store
+    with factory() as session:
+        existing_brand = Brand(name="NEW BRAND")
+        from app.services.categories import create_category
+        primary = create_category(session, name="Tea")
+        secondary = create_category(session, name="Supplements")
+        session.add(existing_brand)
+        session.commit()
+        brand_id, primary_id, secondary_id = existing_brand.id, primary.id, secondary.id
+    item = reviewed_item(client, skus=[
+        {"flavor": "Plain", "size_value": "1000", "size_unit": "g", "servings": 30, "external_sku": "MATCHA-1"},
+        {"flavor": "Berry", "size_value": "1", "size_unit": "kg", "servings": 60, "external_sku": "MATCHA-2"},
+    ])
+    body = promotion_body(category=str(primary_id), secondary=[str(secondary_id)], prices=[
+        {"intake_sku_index": 0, "amount": "125000.50", "currency": "PYG"},
+        {"intake_sku_index": 1, "amount": "149000", "currency": "PYG"},
+    ])
+    url = f"/api/product-intake/items/{item['id']}/promotion"
+    response = client.post(url, json=body)
+    assert response.status_code == 201, response.text
+    result = response.json()
+    assert result["brand_reused"] is True
+    assert result["brand_id"] == str(brand_id)
+    assert result["product"]["readiness"]["ready"] is True
+    assert len(result["sku_ids"]) == 2
+    assert client.post(url, json=body).json()["product_id"] == result["product_id"]
+    assert client.post(url, json=body | {"idempotency_key": str(uuid.uuid4())}).status_code == 409
+    assert client.post(url, json=body | {"sku_prices": []}).status_code == 409
+    detail = client.get(f"/api/product-intake/items/{item['id']}").json()
+    assert detail["status"] == "promoted"
+    assert detail["draft"]["primary_category_name"] == "Suggested category"
+    assert detail["promotion"]["product_id"] == result["product_id"]
+    assert client.get(item["photos"][0]["image_url"]).status_code == 200
+    assert client.put(f"/api/product-intake/items/{item['id']}/draft", json=item["draft"]).status_code == 409
+    assert client.post(f"/api/product-intake/items/{item['id']}/extractions", headers={"Idempotency-Key": str(uuid.uuid4())}).status_code == 409
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(Brand)) == 1
+        assert session.scalar(select(func.count()).select_from(Product)) == 1
+        assert session.scalar(select(func.count()).select_from(SKU)) == 2
+        assert session.scalar(select(func.count()).select_from(Price)) == 2
+        assert session.scalar(select(func.count()).select_from(Category)) == 2
+        assert session.scalar(select(func.count()).select_from(ProductCategory)) == 2
+        assignments = session.scalars(select(ProductCategory)).all()
+        assert sum(row.is_primary for row in assignments) == 1
+        assert {row.category_id for row in assignments} == {primary_id, secondary_id}
+        assert session.scalar(select(func.count()).select_from(ProductIntakePromotion)) == 1
+        photos = session.scalars(select(Photo).order_by(Photo.created_at, Photo.id)).all()
+        assert all(photo.product_id == uuid.UUID(result["product_id"]) and photo.sku_id is None for photo in photos)
+        assert sum(photo.role.value == "front" for photo in photos) == 1
+        assert {Path(photo.file_path).read_bytes() for photo in photos} == {picture(), picture("blue")}
+        provenances = session.scalars(select(SKUFieldProvenance)).all()
+        assert provenances and all(row.source.value == "human" and row.state.value == "verified" and row.locked for row in provenances)
+        prices = session.scalars(select(Price)).all()
+        assert all(price.approved and price.source == "human" for price in prices)
+        assert {price.amount for price in prices} == {Decimal("125000.5000"), Decimal("149000.0000")}
+        assert all(price.valid_from is not None for price in prices)
+        for model in (CatalogSnapshot, CatalogBuild, ProductCopyRun, ImageEnhancementRun):
+            assert session.scalar(select(func.count()).select_from(model)) == 0
+
+
+def test_promotion_rejects_collision_and_rolls_back(store):
+    client, factory, _ = store
+    item = reviewed_item(client)
+    with factory() as session:
+        brand = Brand(name="New Brand")
+        product = Product(brand=brand, name="MATCHA")
+        session.add(product)
+        session.commit()
+    response = client.post(f"/api/product-intake/items/{item['id']}/promotion", json=promotion_body())
+    assert response.status_code == 409, response.text
+    assert "canonical Product" in response.json()["detail"]
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(Product)) == 1
+        assert session.scalar(select(func.count()).select_from(ProductIntakePromotion)) == 0
+        assert session.scalar(select(func.count()).select_from(SKU)) == 0
+        assert session.scalar(select(func.count()).select_from(Price)) == 0
+    assert client.get(f"/api/product-intake/items/{item['id']}").json()["status"] == "draft"
+
+
+def test_promotion_without_category_or_price_is_not_ready(store):
+    client, factory, _ = store
+    item = reviewed_item(client)
+    result = client.post(f"/api/product-intake/items/{item['id']}/promotion", json=promotion_body()).json()
+    assert result["brand_reused"] is False
+    codes = {issue["code"] for issue in result["product"]["readiness"]["blockers"]}
+    assert {"missing_primary_category", "no_publishable_skus"} <= codes
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(Price)) == 0
+        assert session.scalar(select(func.count()).select_from(Category)) == 0
+
+
+def test_promotion_rejects_invalid_choices_and_zero_variants(store):
+    client, factory, _ = store
+    item = reviewed_item(client, skus=[])
+    url = f"/api/product-intake/items/{item['id']}/promotion"
+    assert client.post(url, json=promotion_body()).status_code == 422
+    assert client.get(f"/api/product-intake/items/{uuid.uuid4()}/promotion").status_code == 404
+    item = reviewed_item(client, brand="Another Brand", product="Other Product")
+    url = f"/api/product-intake/items/{item['id']}/promotion"
+    assert client.post(url, json=promotion_body(category=str(uuid.uuid4()))).status_code == 404
+    assert client.post(url, json=promotion_body(prices=[{"intake_sku_index": 0, "amount": "0", "currency": "PYG"}])).status_code == 422
+    assert client.post(url, json=promotion_body(prices=[{"intake_sku_index": 0, "amount": 100, "currency": "PYG"}])).status_code == 422
+    assert client.post(url, json=promotion_body(prices=[{"intake_sku_index": 7, "amount": "100", "currency": "PYG"}])).status_code == 422
+    same_id = str(uuid.uuid4())
+    assert client.post(url, json=promotion_body(category=same_id, secondary=[same_id])).status_code == 422
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(Brand)) == 0
+        assert session.scalar(select(func.count()).select_from(Product)) == 0
+        assert session.scalar(select(func.count()).select_from(ProductIntakePromotion)) == 0
+
+
+def test_duplicate_variant_rolls_back_entire_graph(store):
+    client, factory, _ = store
+    item = reviewed_item(client, skus=[
+        {"flavor": "Vanilla", "size_value": "1000", "size_unit": "g", "servings": 30, "external_sku": "A"},
+        {"flavor": "vanilla", "size_value": "1000.0", "size_unit": "G", "servings": 30, "external_sku": "B"},
+    ])
+    response = client.post(f"/api/product-intake/items/{item['id']}/promotion", json=promotion_body())
+    assert response.status_code == 409, response.text
+    with factory() as session:
+        for model in (Brand, Product, SKU, Price, ProductCategory, ProductIntakePromotion):
+            assert session.scalar(select(func.count()).select_from(model)) == 0
+        assert all(photo.product_id is None for photo in session.scalars(select(Photo)).all())
+    assert client.get(f"/api/product-intake/items/{item['id']}").json()["status"] == "draft"
+
+
+def test_similar_brand_requires_human_resolution(store):
+    client, factory, _ = store
+    with factory() as session:
+        session.add(Brand(name="NewBrand"))
+        session.commit()
+    item = reviewed_item(client, brand="New Brand")
+    response = client.post(f"/api/product-intake/items/{item['id']}/promotion", json=promotion_body())
+    assert response.status_code == 409
+    assert "similar canonical Brand" in response.json()["detail"]
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(Product)) == 0
+
+
+def test_concurrent_same_action_creates_one_product(store):
+    client, factory, _ = store
+    item = reviewed_item(client)
+    body = promotion_body()
+    url = f"/api/product-intake/items/{item['id']}/promotion"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: client.post(url, json=body), range(2)))
+    assert [response.status_code for response in responses] == [201, 201]
+    assert responses[0].json()["product_id"] == responses[1].json()["product_id"]
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(Product)) == 1
+        assert session.scalar(select(func.count()).select_from(SKU)) == 1
+        assert session.scalar(select(func.count()).select_from(ProductIntakePromotion)) == 1
+
+
+def test_promotion_preserves_extraction_observation(store):
+    client, factory, _ = store
+    item = make_item(client).json()
+    extraction = client.post(
+        f"/api/product-intake/items/{item['id']}/extractions",
+        headers={"Idempotency-Key": str(uuid.uuid4())},
+    )
+    assert extraction.status_code == 202
+    worker = JobWorker(factory, {PRODUCT_EXTRACTION_JOB_TYPE: ProductExtractionJobHandler(factory, FakeProvider())}, accepted_job_types={PRODUCT_EXTRACTION_JOB_TYPE})
+    worker.run_once()
+    detail = client.get(f"/api/product-intake/items/{item['id']}").json()
+    assert detail["status"] == "review_required"
+    run_id = uuid.UUID(detail["extraction"]["run_id"])
+    with factory() as session:
+        observed = session.get(ExtractionRun, run_id).structured_result.copy()
+    response = client.post(f"/api/product-intake/items/{item['id']}/promotion", json=promotion_body())
+    assert response.status_code == 201, response.text
+    with factory() as session:
+        run = session.get(ExtractionRun, run_id)
+        assert run.structured_result == observed
+        assert {photo.id for photo in run.photos} == {uuid.UUID(p["id"]) for p in item["photos"]}
+        assert session.scalar(select(func.count()).select_from(ExtractionRun)) == 1
+    after = client.get(f"/api/product-intake/items/{item['id']}").json()
+    assert after["draft"] == detail["draft"]
+    assert after["extraction"]["run_id"] == str(run_id)

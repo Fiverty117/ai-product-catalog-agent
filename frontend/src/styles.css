@@ -48,6 +48,17 @@
 .intake-observation dt { text-transform: capitalize; color: #617069; font-size: .82rem; }
 .intake-observation dd { margin: 4px 0 0; font-weight: 700; }
 .intake-status { font-weight: 700; color: #20694b; }
+.intake-edit-fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.intake-edit-fieldset:disabled { opacity: .78; }
+.intake-review-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.intake-review-facts > div { padding: 12px; background: #f5f8f5; border-radius: 7px; }
+.intake-review-facts dt { color: #617069; font-size: .82rem; }
+.intake-review-facts dd { margin: 5px 0 0; font-weight: 750; }
+.intake-review-image { width: 180px; height: 180px; object-fit: contain; background: #f6f8f6; border-radius: 8px; margin-bottom: 16px; }
+.intake-categories { border: 1px solid #d9e0dc; border-radius: 8px; margin: 20px 0; padding: 12px; }
+.intake-categories label { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.intake-price-row { padding: 16px; border: 1px solid #e0e7e1; border-radius: 8px; margin: 12px 0; }
+.intake-price-row .intake-fields { margin-top: 12px; }
 @media (max-width: 650px) { .intake-shell { padding: 24px 16px; } .intake-header { flex-direction: column; } }
 
 * {

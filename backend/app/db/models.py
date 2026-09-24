@@ -637,6 +637,7 @@ class ProductIntakeItem(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now)
     photos: Mapped[list["ProductIntakePhoto"]] = relationship(back_populates="item", order_by="ProductIntakePhoto.position")
+    promotion: Mapped["ProductIntakePromotion | None"] = relationship(back_populates="item", uselist=False)
 
 
 class ProductIntakePhoto(Base):
@@ -652,6 +653,24 @@ class ProductIntakePhoto(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     item: Mapped[ProductIntakeItem] = relationship(back_populates="photos")
     photo: Mapped[Photo] = relationship()
+
+
+class ProductIntakePromotion(Base):
+    __tablename__ = "product_intake_promotions"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_product_intake_promotions_key"),
+        UniqueConstraint("product_id", name="uq_product_intake_promotions_product"),
+    )
+
+    intake_item_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("product_intake_items.id"), primary_key=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("products.id"), nullable=False)
+    idempotency_key: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    brand_reused: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    promoted_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+
+    item: Mapped[ProductIntakeItem] = relationship(back_populates="promotion")
+    product: Mapped[Product] = relationship()
 
 
 class ExtractionFieldReview(Base):

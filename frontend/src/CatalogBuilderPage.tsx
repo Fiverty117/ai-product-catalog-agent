@@ -177,6 +177,11 @@ export function CatalogBuilderPage() {
   const pollStartedAtRef = useRef(Date.now());
 
   useEffect(() => {
+    const productId = new URLSearchParams(window.location.search).get("product");
+    if (productId && BUILD_ID_PATTERN.test(productId)) setEditorialProductId(productId);
+  }, []);
+
+  useEffect(() => {
     const buildId = new URLSearchParams(window.location.search).get("build");
     if (!buildId || !BUILD_ID_PATTERN.test(buildId)) return;
     const controller = new AbortController();

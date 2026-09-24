@@ -45,6 +45,7 @@ def test_initial_migration_upgrades_clean_database(tmp_path) -> None:
         "product_copy_runs",
         "product_intake_items",
         "product_intake_photos",
+        "product_intake_promotions",
         "skus",
         "sku_field_provenance",
     }
