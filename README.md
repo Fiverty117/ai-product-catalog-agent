@@ -45,6 +45,16 @@ For troubleshooting, use `doctor.ps1`, inspect the run-scoped logs, stop any
 partial launcher-owned runtime with `stop.ps1`, and retry. The individual
 commands below remain available for debugging, not ordinary daily operation.
 
+## Catalog History
+
+Open `/catalogs` from the application navigation to browse Catalog Builds,
+including queued and failed ones. Search frozen Publisher and Cover/edition
+text, filter by status, Publisher, Theme or creation date, and open a Build to
+inspect its frozen products, prices, presentation and render attempts. A valid
+PDF can be previewed or downloaded through the existing Builder artifact
+endpoint. Historical Builds are read-only; the Library never changes their
+configuration, content or PDF.
+
 ## Project status
 
 **Architecture v1.0 frozen. Initial repository scaffold created.**

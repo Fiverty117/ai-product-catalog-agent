@@ -177,6 +177,96 @@ export type CatalogBuild = {
   } | null;
 };
 
+export type HistoryFeature = {
+  state: "unavailable" | "invalid" | "disabled" | "enabled";
+  key: string | null;
+  version: string | null;
+  display_name: string | null;
+  title: string | null;
+  subtitle: string | null;
+  edition_label: string | null;
+  heading: string | null;
+  note: string | null;
+  show_publisher_logo: boolean;
+  hero_present: boolean;
+  contacts: Array<{ kind: string; value: string; href: string | null }>;
+  qr_target_type: string | null;
+  qr_target_url: string | null;
+};
+
+export type CatalogHistoryItem = {
+  build_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  created_at: string;
+  completed_at: string | null;
+  render_version: string;
+  publisher: {
+    key: string; display_name: string; primary_color: string; accent_color: string;
+    contact_text: string | null; social_handle: string | null; logo_present: boolean;
+  } | null;
+  product_count: number | null;
+  sku_count: number | null;
+  layout_key: string | null;
+  layout_version: string | null;
+  layout_display_name: string | null;
+  theme_key: string | null;
+  theme_version: string | null;
+  theme_display_name: string | null;
+  palette_source: string | null;
+  primary_color: string | null;
+  accent_color: string | null;
+  cover: HistoryFeature;
+  closing: HistoryFeature;
+  page_count: number | null;
+  artifact_available: boolean;
+  artifact: { id: string; created_at: string; page_count: number; preview_url: string; download_url: string } | null;
+  latest_render_status: string | null;
+  error: string | null;
+  historical_data_available: boolean;
+};
+
+export type CatalogHistoryPage = {
+  items: CatalogHistoryItem[]; page: number; page_size: number; total: number; all_total: number;
+};
+
+export type CatalogHistoryDetail = CatalogHistoryItem & {
+  snapshot_schema_version: string | null;
+  currency: string | null;
+  as_of: string | null;
+  products: Array<{
+    category_name: string; brand_name: string; product_name: string;
+    short_description: string | null;
+    variants: Array<{
+      external_sku: string | null; flavor: string | null; size_value: string | null;
+      size_unit: string | null; servings: number | null;
+      price_amount: string; price_currency: string;
+    }>;
+  }>;
+  render_attempts: Array<{
+    attempt: number; status: "running" | "succeeded" | "failed";
+    started_at: string; completed_at: string | null;
+    page_count: number | null; error: string | null; render_version: string;
+  }>;
+};
+
+export type CatalogHistoryFilters = {
+  search: string; status: "all" | "ready" | "active" | "failed";
+  publisher: string; theme: string; period: "all" | "today" | "7d" | "30d";
+};
+
+export function fetchCatalogHistory(page: number, filters: CatalogHistoryFilters, signal?: AbortSignal): Promise<CatalogHistoryPage> {
+  const params = new URLSearchParams({ page: String(page), page_size: "20", ...filters });
+  return getJson<CatalogHistoryPage>(`/api/catalogs?${params}`, signal);
+}
+
+export function fetchCatalogHistoryOptions(signal?: AbortSignal): Promise<{ publishers: string[]; themes: string[] }> {
+  return getJson("/api/catalogs/options", signal);
+}
+
+export function fetchCatalogHistoryDetail(buildId: string, signal?: AbortSignal): Promise<CatalogHistoryDetail> {
+  return getJson<CatalogHistoryDetail>(`/api/catalogs/${buildId}`, signal);
+}
+
 export type CatalogBuildReadinessConflict = {
   code: "catalog_readiness_changed";
   message: string;

@@ -593,6 +593,7 @@ export function CatalogBuilderPage() {
         <p className="eyebrow">Catalog workspace</p>
         <h1>Catalog Builder</h1>
         <p>Choose ready products and presentation settings, then generate a PDF catalog.</p>
+        <a className="builder-history-link" href="/catalogs">View catalog history</a>
       </header>
 
       <section className="configuration-bar" aria-labelledby="configuration-title">
@@ -903,6 +904,7 @@ export function CatalogBuilderPage() {
                     rel="noreferrer"
                   >Preview PDF</a>
                   <a href={resolveApiUrl(build.artifact.download_url)}>Download PDF</a>
+                  <a href={`/catalogs/${build.id}`}>View in History</a>
                 </div>
               )}
             </section>

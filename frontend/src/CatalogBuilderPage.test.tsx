@@ -520,6 +520,8 @@ describe("CatalogBuilderPage", () => {
     render(<CatalogBuilderPage />);
     expect(await screen.findByRole("heading", { name: "Catalog ready" })).toBeVisible();
     expect(screen.getByText(/Cover: Editorial · Edición histórica · 2026/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "View catalog history" })).toHaveAttribute("href", "/catalogs");
+    expect(screen.getByRole("link", { name: "View in History" })).toHaveAttribute("href", `/catalogs/${buildId}`);
     expect(apiMocks.fetchCatalogBuild).toHaveBeenCalledWith(buildId, expect.any(AbortSignal));
   });
 
