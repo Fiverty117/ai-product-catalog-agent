@@ -149,6 +149,8 @@ function ProductCard({
                 <li key={`${blocker.code}-${blocker.sku_id ?? "product"}`}>{blocker.message}</li>
               ))}
             </ul>
+            {product.readiness.blockers.some((blocker) => blocker.code === "missing_primary_category" || blocker.code === "inactive_primary_category") &&
+              <a href="/categories" target="_blank" rel="noopener noreferrer">Manage categories</a>}
           </div>
         )}
 

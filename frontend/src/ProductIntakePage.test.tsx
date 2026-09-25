@@ -134,6 +134,8 @@ describe("Product Intake workspace", () => {
     expect(create).toBeEnabled();
     await user.click(create);
     expect(api.createIntakePromotion).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: "Manage categories" })).toHaveAttribute("target", "_blank");
+    expect(api.fetchIntakePromotion).toHaveBeenCalledTimes(2);
     expect(screen.getByText("Tea suggestion", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("Plain · 1000 g · M-1")).toBeInTheDocument();
     expect(screen.getByText("Berry · 1 kg · M-2")).toBeInTheDocument();

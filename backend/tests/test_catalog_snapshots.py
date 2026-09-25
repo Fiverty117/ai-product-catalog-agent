@@ -47,7 +47,7 @@ from app.services.catalog_snapshots import (
     create_catalog_snapshot,
     read_catalog_snapshot_data,
 )
-from app.services.categories import assign_product_category, create_category
+from app.services.categories import assign_product_category, create_category, set_category_active
 from app.services.image_enhancement import (
     complete_image_enhancement_run,
     create_running_image_enhancement_run,
@@ -468,6 +468,7 @@ def test_live_changes_and_later_image_rejection_do_not_change_snapshot(
     product.name = "Changed Product"
     category.name = "Changed Category"
     category.sort_order = 1
+    set_category_active(session, category_id=category.id, is_active=False)
     skus[0].external_sku = "NEW"
     skus[0].flavor = "Chocolate"
     skus[0].size_value = Decimal("1")
@@ -497,6 +498,8 @@ def test_live_changes_and_later_image_rejection_do_not_change_snapshot(
     assert snapshot.payload == frozen_payload
     assert snapshot.content_hash == frozen_hash
     assert data.sections[0].category.name != category.name
+    set_category_active(session, category_id=category.id, is_active=True)
+    assert read_catalog_snapshot_data(session, snapshot.id).sections[0].category.name == data.sections[0].category.name
     assert data.sections[0].products[0].brand_name != product.brand.name
     assert data.sections[0].products[0].product_name != product.name
     assert data.sections[0].products[0].variants[0].flavor == "Vanilla"

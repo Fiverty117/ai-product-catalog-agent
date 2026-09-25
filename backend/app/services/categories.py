@@ -1,9 +1,9 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import case, distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Category, Product, ProductCategory
+from app.db.models import Brand, Category, Product, ProductCategory
 from app.domain.enums import FieldSource
 from app.domain.identity import identity_key_v1
 from app.domain.schemas import CategoryCreate
@@ -44,6 +44,12 @@ class CategoryAssignmentRoleConflictError(CategoryError):
 
 class UnknownProductCategoryAssignmentError(CategoryError):
     pass
+
+
+class CategoryInUseError(CategoryError):
+    def __init__(self, usage: dict[str, int]):
+        self.usage = usage
+        super().__init__("Reassign or remove Product classifications before deactivating this Category.")
 
 
 def create_category(
@@ -189,6 +195,81 @@ def set_category_active(
     _require_bool("is_active", is_active)
     category = _require_category(session, category_id)
     category.is_active = is_active
+    session.flush()
+    return category
+
+
+def category_usage(session: Session, category_id: uuid.UUID) -> dict[str, int]:
+    primary, secondary, total = session.execute(
+        select(
+            func.count(distinct(case((ProductCategory.is_primary.is_(True), ProductCategory.product_id)))),
+            func.count(distinct(case((ProductCategory.is_primary.is_(False), ProductCategory.product_id)))),
+            func.count(distinct(ProductCategory.product_id)),
+        ).where(ProductCategory.category_id == category_id)
+    ).one()
+    return {
+        "primary_product_count": primary,
+        "secondary_product_count": secondary,
+        "total_product_count": total,
+    }
+
+
+def list_managed_categories(
+    session: Session, *, search: str = "", status: str = "active", limit: int = 100, offset: int = 0
+) -> tuple[list[tuple[Category, dict[str, int]]], int]:
+    query = select(Category)
+    if status != "all":
+        query = query.where(Category.is_active.is_(status == "active"))
+    if search.strip():
+        query = query.where(Category.identity_key.contains(identity_key_v1(search), autoescape=True))
+    count = session.scalar(select(func.count()).select_from(query.subquery())) or 0
+    categories = session.scalars(
+        query.order_by(Category.sort_order, Category.identity_key, Category.id).limit(limit).offset(offset)
+    ).all()
+    return [(category, category_usage(session, category.id)) for category in categories], count
+
+
+def category_products(session: Session, category_id: uuid.UUID, *, limit: int = 50) -> list[dict[str, str]]:
+    rows = session.execute(
+        select(Product.id, Product.name, Brand.name, ProductCategory.is_primary)
+        .join(ProductCategory, ProductCategory.product_id == Product.id)
+        .join(Brand, Brand.id == Product.brand_id)
+        .where(ProductCategory.category_id == category_id)
+        .order_by(Brand.identity_key, Product.identity_key, Product.id)
+        .limit(limit)
+    ).all()
+    return [
+        {"product_id": str(product_id), "product_name": product_name, "brand_name": brand_name,
+         "role": "primary" if is_primary else "secondary"}
+        for product_id, product_name, brand_name, is_primary in rows
+    ]
+
+
+def rename_category(session: Session, *, category_id: uuid.UUID, name: str) -> Category:
+    category = _require_category(session, category_id)
+    cleaned = CategoryCreate(name=name).name
+    key = identity_key_v1(cleaned)
+    existing = session.scalar(select(Category).where(Category.identity_key == key, Category.id != category_id))
+    if existing is not None:
+        raise DuplicateCategoryIdentityError(existing)
+    category.name = cleaned
+    session.flush()
+    return category
+
+
+def set_category_order(session: Session, *, category_id: uuid.UUID, sort_order: int) -> Category:
+    category = _require_category(session, category_id)
+    category.sort_order = CategoryCreate(name=category.name, sort_order=sort_order).sort_order
+    session.flush()
+    return category
+
+
+def deactivate_unused_category(session: Session, *, category_id: uuid.UUID) -> Category:
+    category = _require_category(session, category_id)
+    usage = category_usage(session, category_id)
+    if usage["total_product_count"]:
+        raise CategoryInUseError(usage)
+    category.is_active = False
     session.flush()
     return category
 

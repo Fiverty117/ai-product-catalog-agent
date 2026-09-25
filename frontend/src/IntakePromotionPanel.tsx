@@ -89,6 +89,7 @@ export function IntakePromotionPanel({ item, context, onCancel, onCreated }: {
       </label>
     </div>
     <p>Draft suggestion: {item.draft.primary_category_name || "None"}. Select a canonical Category explicitly; suggestions do not create taxonomy.</p>
+    <p>Missing a suitable Category? <a href="/categories" target="_blank" rel="noopener noreferrer">Manage categories</a>, then reopen this review to refresh the choices. Your draft stays here.</p>
     <fieldset className="intake-categories"><legend>Secondary canonical Categories</legend>
       {context.categories.filter((category) => category.id !== primary).map((category) => <label key={category.id}><input disabled={busy} type="checkbox" checked={secondary.includes(category.id)} onChange={(event) => { actionKey.current = null; setSecondary((current) => event.target.checked ? [...current, category.id] : current.filter((id) => id !== category.id)); }} />{category.name}</label>)}
       {context.categories.length === 0 && <p>No active Categories available.</p>}

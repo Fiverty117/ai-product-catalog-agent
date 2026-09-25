@@ -137,6 +137,16 @@ export function ProductIntakePage() {
     finally { setBusy(false); }
   }
 
+  async function openPromotionReview() {
+    if (!item || busy) return;
+    setBusy(true); setError(null);
+    try {
+      setPromotionContext(await fetchIntakePromotion(item.id));
+      setShowPromotionReview(true);
+    } catch (reason) { setError(message(reason)); }
+    finally { setBusy(false); }
+  }
+
   function edit(field: keyof IntakeDraft, value: IntakeDraft[keyof IntakeDraft]) {
     if (draft) { setDraft({ ...draft, [field]: value }); setDirty(true); }
   }
@@ -216,8 +226,10 @@ export function ProductIntakePage() {
       <section className="intake-panel intake-next"><h2>{promoted ? "Product created" : "Next step"}</h2>
         {created ? <><p><strong>{created.brand_name} · {created.product.product_name}</strong> · {created.sku_ids.length} variants</p><p>{created.product.readiness.ready ? "Ready for catalog" : "Not ready for catalog"} ({created.readiness_currency})</p>
           {!created.product.readiness.ready && <ul>{created.product.readiness.blockers.map((blocker, index) => <li key={`${blocker.code}-${index}`}>{blocker.message}</li>)}</ul>}
+          {!created.product.readiness.ready && created.product.readiness.blockers.some((blocker) => blocker.code === "missing_primary_category" || blocker.code === "inactive_primary_category") &&
+            <p><a href="/categories" target="_blank" rel="noopener noreferrer">Manage categories</a>, then open the Product editor to classify it.</p>}
           <div className="intake-actions"><button onClick={() => navigate(`/catalog-builder?product=${created.product_id}`)}>Open product</button><button className="secondary-button" onClick={() => navigate("/catalog-builder")}>Open Catalog Builder</button></div>
-        </> : <><button disabled={!canPromote || busy || !promotionContext} onClick={() => setShowPromotionReview(true)}>Create product</button>
+        </> : <><button disabled={!canPromote || busy || !promotionContext} onClick={() => void openPromotionReview()}>Create product</button>
           <p>{dirty ? "Save the Draft before creating a Product." : !canPromote ? "Complete Brand, Product name and at least one variant to continue." : "Review canonical Categories and optional Prices before confirming."}</p></>}
       </section>
       {showPromotionReview && !promoted && promotionContext && <IntakePromotionPanel item={item} context={promotionContext} onCancel={() => setShowPromotionReview(false)} onCreated={(result) => {

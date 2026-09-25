@@ -805,6 +805,7 @@ describe("CatalogBuilderPage", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Primary Category" }), "");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(within(card).getByText("Not ready")).toBeVisible());
+    expect(within(card).getByRole("link", { name: "Manage categories" })).toHaveAttribute("href", "/categories");
     await user.click(screen.getByRole("button", { name: "Close editorial workspace" }));
     expect(within(card).getByRole("checkbox")).toBeChecked();
     expect(within(card).getByRole("checkbox")).toBeEnabled();

@@ -369,6 +369,32 @@ export class ApiError extends Error {
   }
 }
 
+export type ManagedCategory = {
+  id: string; name: string; identity_key: string; is_active: boolean; sort_order: number;
+  primary_product_count: number; secondary_product_count: number; total_product_count: number;
+};
+
+export type ManagedCategoryDetail = ManagedCategory & {
+  affected_products: { product_id: string; product_name: string; brand_name: string; role: "primary" | "secondary" }[];
+  affected_products_limit: number;
+};
+
+export type ManagedCategoryList = { items: ManagedCategory[]; total: number; all_total: number; limit: number; offset: number };
+
+export function fetchManagedCategories(search: string, status: "active" | "inactive" | "all", offset = 0, signal?: AbortSignal): Promise<ManagedCategoryList> {
+  const params = new URLSearchParams({ search, status, offset: String(offset) });
+  return getJson(`/api/categories?${params}`, signal);
+}
+
+export const fetchManagedCategory = (id: string, signal?: AbortSignal): Promise<ManagedCategoryDetail> =>
+  getJson(`/api/categories/${id}`, signal);
+export const createManagedCategory = (name: string, sortOrder: number): Promise<ManagedCategory> =>
+  requestJson("/api/categories", { method: "POST", body: JSON.stringify({ name, sort_order: sortOrder }) });
+export const updateManagedCategory = (id: string, changes: { name?: string; sort_order?: number }): Promise<ManagedCategory> =>
+  requestJson(`/api/categories/${id}`, { method: "PATCH", body: JSON.stringify(changes) });
+export const setManagedCategoryActive = (id: string, active: boolean): Promise<ManagedCategory> =>
+  requestJson(`/api/categories/${id}/${active ? "reactivate" : "deactivate"}`, { method: "POST" });
+
 async function requestJson<T>(
   path: string,
   options: RequestInit = {},

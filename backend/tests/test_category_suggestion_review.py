@@ -282,6 +282,34 @@ def test_category_rename_makes_accepted_review_stale(session: Session) -> None:
         )
 
 
+def test_renamed_category_keeps_id_for_explicit_corrected_review(session: Session) -> None:
+    product, primary, _, _, run = setup(session)
+    complete(run, session, primary)
+    original_id = primary.id
+    primary.name = "Super Foods"
+    session.flush()
+
+    applied = apply_category_suggestion_review(
+        session, review(run, CategorySuggestionReviewDecision.CORRECTED, corrected_selection={
+            "primary_category_id": original_id, "secondary_category_ids": [],
+        }),
+    )
+    assert applied.applied_at is not None
+    assert session.scalar(select(ProductCategory).where(ProductCategory.product_id == product.id)).category_id == original_id
+
+
+def test_pending_suggestion_cannot_apply_after_category_deactivation(session: Session) -> None:
+    _, primary, _, _, run = setup(session)
+    complete(run, session, primary)
+    set_category_active(session, category_id=primary.id, is_active=False)
+
+    with pytest.raises(StaleCategorySuggestionRunError, match="stale"):
+        apply_category_suggestion_review(
+            session, review(run, CategorySuggestionReviewDecision.ACCEPTED)
+        )
+    assert session.scalar(select(ProductCategory)) is None
+
+
 def test_stale_corrected_review_allows_explicit_current_active_categories(
     session: Session,
 ) -> None:

@@ -91,6 +91,7 @@ export function ProductDataEditor({ data, saving, onSave }: {
 
     <div className="product-data-group">
       <h4>Categories</h4>
+      <p>Need a new canonical Category? <a href="/categories" target="_blank" rel="noopener noreferrer">Manage categories</a>, then reopen this Product to refresh the choices.</p>
       {mode === "categories" ? <div>
         <label>Primary Category<select aria-label="Primary Category" value={primaryId} disabled={saving} onChange={(event) => { setPrimaryId(event.target.value); setSecondaryIds((ids) => ids.filter((id) => id !== event.target.value)); }}>
           <option value="">None</option>{data.categories.map((category) => <option key={category.category_id} value={category.category_id}>{category.name}</option>)}

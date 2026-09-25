@@ -23,6 +23,7 @@ describe("ProductDataEditor", () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(true);
     render(<ProductDataEditor data={data} saving={false} onSave={onSave} />);
+    expect(screen.getByRole("link", { name: "Manage categories" })).toHaveAttribute("target", "_blank");
     await user.click(screen.getByRole("button", { name: "Edit Product" }));
     expect(screen.getByRole("textbox", { name: "Product name" })).toHaveValue("Whey");
     await user.clear(screen.getByRole("textbox", { name: "Product name" }));
