@@ -256,6 +256,7 @@ def build_catalog_render_idempotency_key(
 ) -> str:
     values = payload.model_dump(mode="json")
     if isinstance(payload, CatalogRenderJobPayloadV2):
+        values.pop("builder_choice_provenance", None)
         # Frozen data travels with the Job; its content hash and profile ID define
         # the logical visual/lineage identity without row-specific logo UUIDs.
         values.pop("branding_data")

@@ -123,6 +123,8 @@ def test_status_artifact_attempts_corruption_and_immutability(build_store, monke
     assert client.get(ready["artifact"]["preview_url"]).status_code == 200
     assert client.get(ready["artifact"]["download_url"]).status_code == 200
     assert client.get(f"/api/catalogs/{failed_id}").json()["status"] == "failed"
+    assert client.get(f"/api/catalogs/{failed_id}").json()["can_duplicate"]
+    assert client.get(f"/api/catalogs/{failed_id}/duplicate-template").json()["can_initialize"]
     assert client.get(f"/api/catalogs/{running_id}").json()["status"] == "running"
     assert client.get(f"/api/catalogs/{queued_id}").json()["status"] == "queued"
     assert client.get("/api/catalogs?status=active").json()["total"] == 2
@@ -163,6 +165,7 @@ def test_status_artifact_attempts_corruption_and_immutability(build_store, monke
         session.commit()
     broken = client.get(f"/api/catalogs/{ready_id}").json()
     assert not broken["artifact_available"] and broken["artifact"] is None
+    assert client.get(f"/api/catalogs/{ready_id}/duplicate-template").json()["can_initialize"]
     with factory() as session:
         session.get(CatalogBuild, uuid.UUID(ready_id)).job.status = JobStatus.FAILED
         session.commit()

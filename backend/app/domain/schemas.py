@@ -1619,7 +1619,20 @@ class ResolvedCatalogBranding(StrictSchema):
         return value.upper()
 
 
+class CatalogBuilderChoiceProvenance(StrictSchema):
+    """Optional Builder intent; never part of render identity or frozen visuals."""
+
+    schema_version: Literal["catalog-builder-choice-v1"] = "catalog-builder-choice-v1"
+    primary_color_override: CatalogBrandColor | None = None
+    accent_color_override: CatalogBrandColor | None = None
+    cover_show_publisher_logo: bool | None = None
+    closing_show_publisher_logo: bool | None = None
+    publisher_contact_override: str | None = None
+    publisher_social_override: str | None = None
+
+
 class CatalogRenderJobPayloadV2(CatalogRenderJobPayload):
+    builder_choice_provenance: CatalogBuilderChoiceProvenance | None = None
     catalog_brand_profile_id: uuid.UUID
     branding_schema_version: Literal["catalog-branding-v1"]
     branding_hash: Sha256
@@ -2033,6 +2046,7 @@ class CatalogClosingCreate(StrictSchema):
 
 class CatalogBuildCreate(StrictSchema):
     product_ids: NonEmptyUUIDList
+    source_build_id: uuid.UUID | None = None
     catalog_brand_profile_id: uuid.UUID
     layout_key: NonEmptyText
     layout_version: NonEmptyText
@@ -2083,6 +2097,7 @@ class CatalogBuildArtifactSummary(StrictSchema):
 
 class CatalogBuildRead(StrictSchema):
     id: uuid.UUID
+    source_build_id: uuid.UUID | None = None
     status: Literal["queued", "running", "succeeded", "failed"]
     catalog_snapshot_id: uuid.UUID
     product_count: int = Field(gt=0)

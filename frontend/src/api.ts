@@ -130,6 +130,7 @@ export type CatalogCoverInput = { enabled: false } | {
 
 export type CatalogBuild = {
   id: string;
+  source_build_id?: string | null;
   status: "queued" | "running" | "succeeded" | "failed";
   catalog_snapshot_id: string;
   product_count: number;
@@ -230,6 +231,10 @@ export type CatalogHistoryPage = {
 };
 
 export type CatalogHistoryDetail = CatalogHistoryItem & {
+  can_duplicate: boolean;
+  duplicate_unavailable_reason: "invalid_snapshot" | "unsupported_configuration" | null;
+  source_build_id: string | null;
+  source_build_created_at: string | null;
   snapshot_schema_version: string | null;
   currency: string | null;
   as_of: string | null;
@@ -265,6 +270,44 @@ export function fetchCatalogHistoryOptions(signal?: AbortSignal): Promise<{ publ
 
 export function fetchCatalogHistoryDetail(buildId: string, signal?: AbortSignal): Promise<CatalogHistoryDetail> {
   return getJson<CatalogHistoryDetail>(`/api/catalogs/${buildId}`, signal);
+}
+
+export type CatalogDuplicateTemplate = {
+  source: {
+    build_id: string; created_at: string; status: CatalogBuild["status"];
+    render_version: string; historical_publisher_name: string | null;
+    historical_product_count: number | null;
+  };
+  can_initialize: boolean;
+  unavailable_reason: "invalid_snapshot" | "unsupported_configuration" | null;
+  products: Array<{
+    product_id: string; status: "ready" | "not_ready" | "unavailable";
+    historical_name: string; historical_brand_name: string;
+    current_name: string | null; current_brand_name: string | null;
+    blockers: ReadinessIssue[];
+  }>;
+  publisher: { state: "selected" | "unavailable"; historical_name: string; current_profile_id: string | null; current_name: string | null } | null;
+  layout: { state: "copied" | "defaulted" | "unavailable"; key: string | null; version: string | null } | null;
+  theme: { state: "copied" | "defaulted" | "unavailable"; key: string | null; version: string | null } | null;
+  palette: {
+    state: "copied" | "unresolved"; source: "publisher" | "custom" | "unresolved";
+    primary_color_override: string | null; accent_color_override: string | null;
+    historical_resolved_primary: string | null; historical_resolved_accent: string | null;
+  } | null;
+  cover: {
+    enabled: boolean; state: "copied" | "defaulted" | "unavailable";
+    key: string | null; version: string | null; title: string | null;
+    subtitle: string | null; edition_label: string | null;
+    show_publisher_logo: boolean;
+    hero: CatalogCoverAsset | null; hero_unavailable: boolean;
+  } | null;
+  closing: { state: "copied" | "defaulted" | "unavailable"; choice: CatalogClosingInput } | null;
+  defaults_applied: Array<{ code: string; field: string; product_id: string | null }>;
+  warnings: Array<{ code: string; field: string; product_id: string | null }>;
+};
+
+export function fetchCatalogDuplicateTemplate(buildId: string, signal?: AbortSignal): Promise<CatalogDuplicateTemplate> {
+  return getJson<CatalogDuplicateTemplate>(`/api/catalogs/${buildId}/duplicate-template`, signal);
 }
 
 export type CatalogBuildReadinessConflict = {
@@ -563,6 +606,7 @@ export async function uploadCatalogCoverAsset(image: File): Promise<CatalogCover
 
 export type CatalogBuildInput = {
   product_ids: string[];
+  source_build_id?: string;
   catalog_brand_profile_id: string;
   layout_key: CatalogLayout["key"];
   layout_version: string;

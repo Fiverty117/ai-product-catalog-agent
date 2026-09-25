@@ -168,6 +168,8 @@ def create_build(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Product not found.",
         ) from exc
+    except UnknownCatalogBuildError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source catalog build not found.") from exc
     except UnknownCatalogBrandProfileError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

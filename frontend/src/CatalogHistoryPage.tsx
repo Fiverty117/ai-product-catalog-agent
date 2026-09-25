@@ -150,7 +150,10 @@ export function CatalogHistoryDetailPage() {
     {error && <div className="history-message history-error" role="alert">{error} <Link to="/catalogs">Back to catalogs</Link></div>}
     {!loading && detail && <>
       <header className="history-header"><div><p className="eyebrow">Frozen catalog record</p><h1>{detail.cover.title || "Catalog"}</h1><p>{detail.publisher?.display_name ?? "Historical data unavailable"} · {dateTime(detail.created_at)}</p></div><span className={`history-status history-${detail.status}`}>{statusLabel(detail.status)}</span></header>
-      <div className="history-detail-actions"><PdfActions item={detail} /></div>
+      <div className="history-detail-actions"><PdfActions item={detail} />{detail.can_duplicate
+        ? <Link to={`/catalog-builder?duplicateFrom=${detail.build_id}`}>Duplicate as new draft</Link>
+        : <span className="history-unavailable">Duplicate unavailable — {detail.duplicate_unavailable_reason === "invalid_snapshot" ? "historical Snapshot is invalid" : "historical configuration is unsupported"}</span>}</div>
+      {detail.source_build_id && <p className="history-lineage">Based on <Link to={`/catalogs/${detail.source_build_id}`}>catalog from {dateTime(detail.source_build_created_at)}</Link>.</p>}
       {!detail.historical_data_available && <div className="history-message history-error" role="status">Some frozen historical data is unavailable or failed validation. This record has not been changed.</div>}
       {detail.error && <div className="history-message history-error" role="status">{detail.error}</div>}
       <section className="history-panel"><h2>Overview</h2><dl className="history-facts"><div><dt>Status</dt><dd>{statusLabel(detail.status)}</dd></div><div><dt>Created</dt><dd>{dateTime(detail.created_at)}</dd></div><div><dt>Completed</dt><dd>{dateTime(detail.completed_at)}</dd></div><div><dt>Products</dt><dd>{detail.product_count ?? "Unavailable"}</dd></div><div><dt>Pages</dt><dd>{detail.page_count ?? "Unavailable"}</dd></div><div><dt>Render</dt><dd>{detail.render_version}</dd></div><div><dt>Snapshot</dt><dd>{detail.snapshot_schema_version ?? "Unavailable"}</dd></div><div><dt>As of</dt><dd>{dateTime(detail.as_of)}</dd></div></dl></section>

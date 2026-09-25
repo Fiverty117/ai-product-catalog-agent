@@ -41,7 +41,9 @@
 .history-error { border-color: #e8b9b7; color: #872d2b; }
 .history-pagination { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 22px; }
 .history-back { display: inline-block; margin-bottom: 20px; }
-.history-detail-actions { margin: 0 0 20px; }
+.history-detail-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 0 0 20px; }
+.history-detail-actions > a { display: inline-block; border-radius: 7px; padding: 10px 15px; color: white; background: #20694b; text-decoration: none; }
+.history-lineage { margin: -8px 0 20px; color: #5c6963; }
 .history-panel { margin: 0 0 16px; }
 .history-panel h2 { color: #153528; margin: 0 0 16px; font-size: 1.25rem; }
 .history-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 18px; margin: 0; }
@@ -136,6 +138,19 @@ select:focus-visible {
   margin: 0 auto;
   padding: 48px 40px 64px;
 }
+.duplicate-banner, .duplicate-attention { margin: 0 0 18px; padding: 19px 22px; border-radius: 10px; border: 1px solid #bad4c4; background: #eaf4ed; }
+.duplicate-banner { display: flex; justify-content: space-between; gap: 24px; }
+.duplicate-banner h2, .duplicate-attention h2 { margin: 5px 0 8px; color: #153528; font-size: 1.15rem; }
+.duplicate-banner p { margin: 5px 0; max-width: 850px; }
+.duplicate-actions { display: flex; align-items: start; gap: 12px; flex-wrap: wrap; white-space: nowrap; }
+.duplicate-actions a { color: #20694b; font-weight: 700; }
+.duplicate-actions button, .duplicate-attention button { border: 1px solid #20694b; border-radius: 6px; background: white; color: #20694b; padding: 7px 11px; cursor: pointer; font-weight: 700; }
+.duplicate-attention { border-color: #e1ceb0; background: #fffaf1; }
+.duplicate-attention-item { display: grid; gap: 4px; border-top: 1px solid #e7dccb; padding: 10px 0; }
+.duplicate-attention-item ul { margin: 0; padding-left: 22px; }
+.duplicate-attention-item button { justify-self: start; }
+.duplicate-defaults { color: #655c48; font-size: .9rem; }
+.duplicate-palette-choice { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 
 .page-header {
   margin-bottom: 28px;

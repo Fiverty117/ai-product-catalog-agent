@@ -9,6 +9,7 @@ import type {
   CatalogTheme,
   CatalogCoverLayout,
   CatalogClosingLayout,
+  CatalogDuplicateTemplate,
   ProductCopyEditorialSummary,
   ProductSummary,
 } from "./api";
@@ -34,6 +35,7 @@ const apiMocks = vi.hoisted(() => ({
   reviewProductDerivedImage: vi.fn(),
   createCatalogBuild: vi.fn(),
   fetchCatalogBuild: vi.fn(),
+  fetchCatalogDuplicateTemplate: vi.fn(),
   retryCatalogBuild: vi.fn(),
 }));
 
@@ -148,6 +150,30 @@ const allProducts = [
   product("blocked", "Needs Review", false, "none"),
 ];
 
+const SOURCE_ID = "11111111-1111-4111-8111-111111111111";
+const NEW_BUILD_ID = "22222222-2222-4222-8222-222222222222";
+function duplicateTemplate(overrides: Partial<CatalogDuplicateTemplate> = {}): CatalogDuplicateTemplate {
+  return {
+    source: { build_id: SOURCE_ID, created_at: "2026-09-24T12:00:00Z", status: "failed", render_version: "catalog.render.v5", historical_publisher_name: "Historical Publisher", historical_product_count: 3 },
+    can_initialize: true, unavailable_reason: null,
+    products: [
+      { product_id: "ready", status: "ready", historical_name: "Old Whey", historical_brand_name: "Landerfit", current_name: "Premium Whey", current_brand_name: "Landerfit", blockers: [] },
+      { product_id: "blocked", status: "not_ready", historical_name: "Old Review", historical_brand_name: "Landerfit", current_name: "Needs Review", current_brand_name: "Landerfit", blockers: allProducts[2].readiness.blockers },
+      { product_id: "gone", status: "unavailable", historical_name: "Discontinued", historical_brand_name: "Old Brand", current_name: null, current_brand_name: null, blockers: [] },
+    ],
+    publisher: { state: "selected", historical_name: "Historical Publisher", current_profile_id: "brand-2", current_name: "Secondary Brand" },
+    layout: { state: "copied", key: "dense", version: "1" }, theme: { state: "copied", key: "premium", version: "1" },
+    palette: { state: "copied", source: "publisher", primary_color_override: null, accent_color_override: null, historical_resolved_primary: null, historical_resolved_accent: null },
+    cover: { enabled: true, state: "copied", key: "editorial", version: "1", title: "September Catalog", subtitle: "Special", edition_label: "2026", show_publisher_logo: false, hero: null, hero_unavailable: false },
+    closing: { state: "copied", choice: { enabled: false } },
+    defaults_applied: [], warnings: [
+      { code: "product_not_ready", field: "products", product_id: "blocked" },
+      { code: "product_unavailable", field: "products", product_id: "gone" },
+    ],
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   window.history.replaceState({}, "", "/catalog-builder");
   apiMocks.fetchProductImageEditorial.mockImplementation((id: string) => Promise.resolve({
@@ -176,10 +202,116 @@ beforeEach(() => {
   apiMocks.reviewProductCopy.mockReset();
   apiMocks.createCatalogBuild.mockReset();
   apiMocks.fetchCatalogBuild.mockReset();
+  apiMocks.fetchCatalogDuplicateTemplate.mockReset();
   apiMocks.retryCatalogBuild.mockReset();
 });
 
 describe("CatalogBuilderPage", () => {
+  it("waits for duplicate hydration, selects only current-ready Products, and applies the template once", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState({}, "", `/catalog-builder?duplicateFrom=${SOURCE_ID}`);
+    let resolveTemplate!: (value: CatalogDuplicateTemplate) => void;
+    apiMocks.fetchCatalogDuplicateTemplate.mockReturnValue(new Promise<CatalogDuplicateTemplate>((resolve) => { resolveTemplate = resolve; }));
+    apiMocks.createCatalogBuild.mockResolvedValue(catalogBuild("succeeded", { id: NEW_BUILD_ID, source_build_id: SOURCE_ID }));
+    render(<CatalogBuilderPage />);
+    expect(screen.getByRole("status")).toHaveTextContent("Preparing draft from historical catalog");
+    expect(screen.queryByRole("button", { name: "Create catalog" })).not.toBeInTheDocument();
+    expect(apiMocks.createCatalogBuild).not.toHaveBeenCalled();
+    await act(async () => { resolveTemplate(duplicateTemplate()); });
+    const banner = await screen.findByRole("region", { name: "New catalog draft" });
+    expect(banner).toHaveTextContent("Current Product, price, category, copy, image and Publisher data");
+    expect(banner).toHaveTextContent("Selected now: 1");
+    expect(screen.getByText("Old Brand — Discontinued")).toBeVisible();
+    expect(within(screen.getByRole("region", { name: "Needs attention" })).getByText("Product has no primary Category.")).toBeVisible();
+    const readyCard = screen.getByRole("heading", { name: "Premium Whey" }).closest("article")!;
+    expect(within(readyCard).getByRole("checkbox")).toBeChecked();
+    expect(within(readyCard).getByText("Gs. 350.000")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Catalog brand" })).toHaveValue("brand-2");
+    expect(screen.getByRole("combobox", { name: "Layout" })).toHaveValue("dense");
+    expect(screen.getByRole("radio", { name: /Premium/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Include cover page" })).toBeChecked();
+    expect(screen.getByRole("textbox", { name: "Catalog title" })).toHaveValue("September Catalog");
+    await user.click(screen.getByRole("radio", { name: /Bold/ }));
+    await user.clear(screen.getByRole("textbox", { name: "Catalog title" }));
+    await user.type(screen.getByRole("textbox", { name: "Catalog title" }), "October Catalog");
+    await user.type(screen.getByRole("searchbox", { name: "Search products or brands" }), "Older");
+    await waitFor(() => expect(apiMocks.fetchProducts).toHaveBeenCalledWith("Older", "all", expect.anything()));
+    expect(screen.getByRole("radio", { name: /Bold/ })).toBeChecked();
+    expect(screen.getByRole("textbox", { name: "Catalog title" })).toHaveValue("October Catalog");
+    await user.click(screen.getByRole("button", { name: "Create catalog" }));
+    await waitFor(() => expect(apiMocks.createCatalogBuild).toHaveBeenCalledTimes(1));
+    const request = apiMocks.createCatalogBuild.mock.calls[0][0];
+    expect(request.product_ids).toEqual(["ready"]);
+    expect(request.source_build_id).toBe(SOURCE_ID);
+    expect(request).not.toHaveProperty("price");
+    expect(request.theme_key).toBe("bold");
+    expect(request.cover.title).toBe("October Catalog");
+    await waitFor(() => expect(window.location.search).toBe(`?build=${NEW_BUILD_ID}`));
+    expect(screen.queryByRole("region", { name: "New catalog draft" })).not.toBeInTheDocument();
+  }, 20000);
+
+  it("requires an explicit palette decision for old custom colors and Start fresh clears provenance", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState({}, "", `/catalog-builder?duplicateFrom=${SOURCE_ID}`);
+    apiMocks.fetchCatalogDuplicateTemplate.mockResolvedValue(duplicateTemplate({
+      palette: { state: "unresolved", source: "unresolved", primary_color_override: null, accent_color_override: null,
+        historical_resolved_primary: "#123456", historical_resolved_accent: "#ABCDEF" },
+      warnings: [{ code: "palette_override_provenance_unavailable", field: "palette", product_id: null }],
+    }));
+    render(<CatalogBuilderPage />);
+    expect(await screen.findByRole("region", { name: "New catalog draft" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Use historical pair as custom" }));
+    expect(screen.getByRole("textbox", { name: "Primary hex" })).toHaveValue("#123456");
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Start fresh" }));
+    expect(window.location.search).toBe("");
+    expect(screen.queryByRole("region", { name: "New catalog draft" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    expect(apiMocks.createCatalogBuild).not.toHaveBeenCalled();
+  });
+
+  it("rehydrates a fresh visit and requires replacement of a missing Hero and current contact", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState({}, "", `/catalog-builder?duplicateFrom=${SOURCE_ID}`);
+    apiMocks.fetchCatalogDuplicateTemplate.mockResolvedValue(duplicateTemplate({
+      cover: { enabled: true, state: "copied", key: "hero", version: "1", title: "Historical Hero", subtitle: null,
+        edition_label: null, show_publisher_logo: false, hero: null, hero_unavailable: true },
+      closing: { state: "copied", choice: { enabled: true, closing_key: "contact", closing_version: "1", heading: "Contact",
+        show_publisher_logo: false, publisher_contact: { enabled: true }, publisher_social: { enabled: false },
+        whatsapp: { enabled: false }, phone: { enabled: false }, instagram: { enabled: false },
+        website: { enabled: false }, address: { enabled: false }, qr: { enabled: false } } },
+      warnings: [{ code: "hero_asset_unavailable", field: "cover.hero", product_id: null },
+        { code: "publisher_contact_unavailable", field: "closing.publisher_contact", product_id: null }],
+    }));
+    apiMocks.uploadCatalogCoverAsset.mockResolvedValue({ asset_id: "new-hero", mime_type: "image/png", width: 40, height: 30, preview_url: "/api/catalog-builder/cover-assets/new-hero/image" });
+    const view = render(<CatalogBuilderPage />);
+    expect(await screen.findByRole("region", { name: "New catalog draft" })).toBeVisible();
+    expect(screen.getByText(/Historical Hero image unavailable/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create catalog" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Hero/ })).toBeChecked();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Catalog brand" }), "brand-1");
+    expect(screen.getByText(/From publisher: Atención comercial/)).toBeVisible();
+    await user.upload(screen.getByLabelText("Hero image (optional for Minimal/Editorial)"),
+      new File(["png"], "hero.png", { type: "image/png" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create catalog" })).toBeEnabled());
+    await user.clear(screen.getByRole("textbox", { name: "Catalog title" }));
+    await user.type(screen.getByRole("textbox", { name: "Catalog title" }), "Edited Hero");
+    view.unmount();
+    render(<CatalogBuilderPage />);
+    expect(await screen.findByRole("textbox", { name: "Catalog title" })).toHaveValue("Historical Hero");
+    expect(apiMocks.fetchCatalogDuplicateTemplate).toHaveBeenCalledTimes(2);
+  }, 20000);
+
+  it("gives build precedence for conflicting query parameters and never loads a duplicate", async () => {
+    window.history.replaceState({}, "", `/catalog-builder?build=${NEW_BUILD_ID}&duplicateFrom=${SOURCE_ID}`);
+    apiMocks.fetchCatalogBuild.mockResolvedValue(catalogBuild("succeeded", { id: NEW_BUILD_ID }));
+    render(<CatalogBuilderPage />);
+    expect(await screen.findByText(/saved build takes precedence/)).toBeVisible();
+    expect(apiMocks.fetchCatalogDuplicateTemplate).not.toHaveBeenCalled();
+    await waitFor(() => expect(apiMocks.fetchCatalogBuild).toHaveBeenCalledWith(NEW_BUILD_ID, expect.anything()));
+  });
+
   it("opens the existing Product editorial drawer from a promoted Intake link", async () => {
     const productId = "11111111-1111-4111-8111-111111111111";
     window.history.replaceState({}, "", `/catalog-builder?product=${productId}`);

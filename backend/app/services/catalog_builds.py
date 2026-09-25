@@ -15,6 +15,7 @@ from app.db.models import CatalogArtifact, CatalogBuild, CatalogRenderRun
 from app.db.types import utc_now
 from app.domain.enums import ExtractionRunStatus, JobStatus
 from app.domain.schemas import (
+    CatalogBuilderChoiceProvenance,
     CatalogBuildArtifactSummary,
     CatalogBuildCreate,
     CatalogBuildRead,
@@ -111,6 +112,9 @@ def create_catalog_build(
             _require_matching_request(existing, request_hash)
             return get_catalog_build(session, existing.id)
 
+        if request.source_build_id is not None and session.get(CatalogBuild, request.source_build_id) is None:
+            raise UnknownCatalogBuildError("Source catalog build not found")
+
         layout = resolve_catalog_layout(request.layout_key)
         if request.layout_version != layout.version:
             raise UnknownCatalogLayoutError(
@@ -166,9 +170,23 @@ def create_catalog_build(
                 config=CatalogRenderConfig(layout=layout.key, template_key="grabelan-catalog-v3"),
                 storage_root=storage_root, template_root=template_root,
             )
+        # This metadata records only choices that cannot be recovered from
+        # resolved render values. It is not consumed by the renderer or worker.
+        provenance = CatalogBuilderChoiceProvenance(
+            primary_color_override=request.primary_color_override,
+            accent_color_override=request.accent_color_override,
+            cover_show_publisher_logo=(bool(request.cover.show_publisher_logo if request.cover.show_publisher_logo is not None else True)
+                                       if request.cover and request.cover.enabled else None),
+            closing_show_publisher_logo=(bool(request.closing.show_publisher_logo if request.closing.show_publisher_logo is not None else True)
+                                         if request.closing and request.closing.enabled else None),
+            publisher_contact_override=(request.closing.publisher_contact.override if request.closing and request.closing.enabled else None),
+            publisher_social_override=(request.closing.publisher_social.override if request.closing and request.closing.enabled else None),
+        )
+        job.payload = {**job.payload, "builder_choice_provenance": provenance.model_dump(mode="json")}
         build = CatalogBuild(
             idempotency_key=request.idempotency_key,
             request_hash=request_hash,
+            source_build_id=request.source_build_id,
             catalog_snapshot=snapshot,
             job=job,
         )
@@ -222,6 +240,7 @@ def get_catalog_build(session: Session, build_id: uuid.UUID) -> CatalogBuildRead
     latest_run = _latest_render_run(session, job.id)
     return CatalogBuildRead(
         id=build.id,
+        source_build_id=build.source_build_id,
         status=status,
         catalog_snapshot_id=build.catalog_snapshot_id,
         product_count=product_count,
@@ -340,6 +359,8 @@ def hash_catalog_build_request(request: CatalogBuildCreate) -> str:
         "layout_version": request.layout_version,
         "currency": request.currency,
     }
+    if request.source_build_id is not None:
+        identity["source_build_id"] = str(request.source_build_id)
     if request.theme_key is not None:
         identity.update({
             "theme_key": request.theme_key,

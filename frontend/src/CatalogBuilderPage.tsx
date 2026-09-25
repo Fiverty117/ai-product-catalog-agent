@@ -12,11 +12,13 @@ import {
   CatalogCoverInput,
   CatalogClosingLayout,
   CatalogClosingInput,
+  CatalogDuplicateTemplate,
   ProductSummary,
   ApiError,
   createCatalogBuild,
   fetchBrandProfiles,
   fetchCatalogBuild,
+  fetchCatalogDuplicateTemplate,
   fetchLayouts,
   fetchThemes,
   fetchCoverLayouts,
@@ -53,8 +55,28 @@ function validHttpUrl(value: string): boolean {
 
 function rememberBuildId(buildId: string): void {
   const url = new URL(window.location.href);
+  url.searchParams.delete("duplicateFrom");
   url.searchParams.set("build", buildId);
   window.history.replaceState(window.history.state, "", url);
+}
+
+function duplicateNotice(code: string): string {
+  return ({
+    product_not_ready: "A previously included Product is no longer ready.",
+    product_unavailable: "A previously included Product is no longer available.",
+    publisher_unavailable: "Select a current Publisher; the historical profile is unavailable.",
+    layout_version_unavailable: "The historical Layout version is unavailable. Choose a Layout.",
+    theme_version_unavailable: "The historical Theme version is unavailable. Choose a Theme.",
+    cover_version_unavailable: "The historical Cover style is unavailable. Choose a Cover style.",
+    closing_version_unavailable: "The historical Closing style is unavailable. Choose a Closing style.",
+    hero_asset_unavailable: "Historical Hero image unavailable. Upload a new Hero image.",
+    publisher_contact_unavailable: "A current Publisher contact value is missing. Supply an override or turn it off.",
+    publisher_contact_provenance_unavailable: "An old Publisher contact override cannot be distinguished from a derived value; the draft uses the current Publisher value. Review it.",
+    logo_choice_provenance_unavailable: "The old catalog had no Publisher logo, so the original show-logo choice is unknown. Review this setting.",
+    palette_override_provenance_unavailable: "The old custom palette does not identify which colors were explicit. Choose Publisher colors or apply the historical pair as custom.",
+    no_ready_products: "No previously included Products are ready now. Select a current ready Product to create a catalog.",
+    source_currency_defaulted: "The old catalog used another currency. This Builder uses current PYG prices.",
+  } as Record<string, string>)[code] ?? code.replaceAll("_", " ");
 }
 
 function formatPrice(amount: string, currency: string): string {
@@ -185,6 +207,19 @@ function ProductCard({
 }
 
 export function CatalogBuilderPage() {
+  const [urlConflict] = useState(() => {
+    const query = new URLSearchParams(window.location.search);
+    return Boolean(query.get("build") && query.get("duplicateFrom"));
+  });
+  const [duplicateSourceId, setDuplicateSourceId] = useState<string | null>(() => {
+    const query = new URLSearchParams(window.location.search);
+    return query.get("build") ? null : query.get("duplicateFrom");
+  });
+  const [duplicateTemplate, setDuplicateTemplate] = useState<CatalogDuplicateTemplate | null>(null);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const [duplicateHydrated, setDuplicateHydrated] = useState(false);
+  const [paletteNeedsChoice, setPaletteNeedsChoice] = useState(false);
+  const hydratedSourceRef = useRef<string | null>(null);
   const [products, setProducts] = useState<ProductSummary[] | null>(null);
   const [profiles, setProfiles] = useState<BrandProfile[] | null>(null);
   const [layouts, setLayouts] = useState<CatalogLayout[] | null>(null);
@@ -196,12 +231,12 @@ export function CatalogBuilderPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Record<string, ProductSummary>>({});
   const [brandProfileId, setBrandProfileId] = useState("");
-  const [layoutKey, setLayoutKey] = useState<CatalogLayout["key"]>("classic");
-  const [themeKey, setThemeKey] = useState<CatalogTheme["key"]>("minimal");
+  const [layoutKey, setLayoutKey] = useState<CatalogLayout["key"] | "">("classic");
+  const [themeKey, setThemeKey] = useState<CatalogTheme["key"] | "">("minimal");
   const [primaryOverride, setPrimaryOverride] = useState<string | null>(null);
   const [accentOverride, setAccentOverride] = useState<string | null>(null);
   const [coverEnabled, setCoverEnabled] = useState(false);
-  const [coverKey, setCoverKey] = useState<CatalogCoverLayout["key"]>("minimal");
+  const [coverKey, setCoverKey] = useState<CatalogCoverLayout["key"] | "">("minimal");
   const [coverTitle, setCoverTitle] = useState("Catálogo");
   const [coverSubtitle, setCoverSubtitle] = useState("");
   const [coverEdition, setCoverEdition] = useState("");
@@ -210,7 +245,7 @@ export function CatalogBuilderPage() {
   const [coverUploadError, setCoverUploadError] = useState<string | null>(null);
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [closingEnabled, setClosingEnabled] = useState(false);
-  const [closingKey, setClosingKey] = useState<CatalogClosingLayout["key"]>("contact");
+  const [closingKey, setClosingKey] = useState<CatalogClosingLayout["key"] | "">("contact");
   const [closingHeading, setClosingHeading] = useState("Hacé tu pedido");
   const [closingNote, setClosingNote] = useState("");
   const [closingShowLogo, setClosingShowLogo] = useState(true);
@@ -235,6 +270,29 @@ export function CatalogBuilderPage() {
     const productId = new URLSearchParams(window.location.search).get("product");
     if (productId && BUILD_ID_PATTERN.test(productId)) setEditorialProductId(productId);
   }, []);
+
+  useEffect(() => {
+    if (!duplicateSourceId) return;
+    if (!BUILD_ID_PATTERN.test(duplicateSourceId)) {
+      setDuplicateError("The historical Catalog ID is invalid.");
+      return;
+    }
+    const controller = new AbortController();
+    fetchCatalogDuplicateTemplate(duplicateSourceId, controller.signal)
+      .then((template) => {
+        if (!template.can_initialize) {
+          setDuplicateError(template.unavailable_reason === "invalid_snapshot"
+            ? "This catalog cannot be duplicated because its historical Snapshot is invalid."
+            : "This catalog uses an unsupported historical configuration.");
+          return;
+        }
+        setDuplicateTemplate(template);
+      })
+      .catch((caught: unknown) => {
+        if ((caught as Error).name !== "AbortError") setDuplicateError("The historical Catalog draft could not be prepared.");
+      });
+    return () => controller.abort();
+  }, [duplicateSourceId]);
 
   useEffect(() => {
     const buildId = new URLSearchParams(window.location.search).get("build");
@@ -309,6 +367,67 @@ export function CatalogBuilderPage() {
   }, [search, readinessFilter, refreshToken]);
 
   useEffect(() => {
+    if (!duplicateSourceId || !duplicateTemplate || !products || !profiles || !layouts || !themes || !coverLayouts || !closingLayouts) return;
+    if (hydratedSourceRef.current === duplicateSourceId) return;
+    hydratedSourceRef.current = duplicateSourceId;
+
+    const readyIds = new Set(duplicateTemplate.products.filter((item) => item.status === "ready").map((item) => item.product_id));
+    const selected = products.filter((item) => readyIds.has(item.product_id) && item.readiness.ready);
+    setSelectedIds(selected.map((item) => item.product_id).sort());
+    setSelectedProducts(Object.fromEntries(selected.map((item) => [item.product_id, item])));
+    const publisherId = duplicateTemplate.publisher?.current_profile_id;
+    setBrandProfileId(publisherId && profiles.some((item) => item.id === publisherId) ? publisherId : "");
+    const layout = duplicateTemplate.layout;
+    setLayoutKey(layout?.state !== "unavailable" && layouts.some((item) => item.key === layout?.key && item.version === layout?.version)
+      ? layout!.key as CatalogLayout["key"] : "");
+    const theme = duplicateTemplate.theme;
+    setThemeKey(theme?.state !== "unavailable" && themes.some((item) => item.key === theme?.key && item.version === theme?.version)
+      ? theme!.key as CatalogTheme["key"] : "");
+    setPrimaryOverride(duplicateTemplate.palette?.primary_color_override ?? null);
+    setAccentOverride(duplicateTemplate.palette?.accent_color_override ?? null);
+    setPaletteNeedsChoice(duplicateTemplate.palette?.state === "unresolved");
+
+    const cover = duplicateTemplate.cover;
+    setCoverEnabled(Boolean(cover?.enabled));
+    setCoverKey(cover?.enabled && coverLayouts.some((item) => item.key === cover.key && item.version === cover.version)
+      ? cover.key as CatalogCoverLayout["key"] : "minimal");
+    if (cover?.enabled && cover.state === "unavailable") setCoverKey("");
+    setCoverTitle(cover?.title ?? "Catálogo");
+    setCoverSubtitle(cover?.subtitle ?? "");
+    setCoverEdition(cover?.edition_label ?? "");
+    setShowPublisherLogo(cover?.show_publisher_logo ?? true);
+    setCoverHero(cover?.hero ?? null);
+
+    const closing = duplicateTemplate.closing?.choice;
+    setClosingEnabled(Boolean(closing?.enabled));
+    if (closing?.enabled) {
+      setClosingKey(duplicateTemplate.closing?.state !== "unavailable" && closingLayouts.some((item) => item.key === closing.closing_key && item.version === closing.closing_version)
+        ? closing.closing_key : "");
+      setClosingHeading(closing.heading ?? "");
+      setClosingNote(closing.note ?? "");
+      setClosingShowLogo(closing.show_publisher_logo);
+      setClosingContacts(Object.fromEntries(CLOSING_CONTACT_KEYS.map((key) => [key, {
+        enabled: closing[key].enabled,
+        useCustom: (key === "publisher_contact" || key === "publisher_social") && Boolean(closing[key].override),
+        value: closing[key].override ?? "",
+      }])) as Record<ClosingContactKey, ClosingContactState>);
+      setClosingQrEnabled(closing.qr.enabled);
+      setClosingQrTarget(closing.qr.enabled ? closing.qr.target_type : "whatsapp");
+      setClosingQrCustomUrl(closing.qr.enabled && closing.qr.target_type === "custom_url" ? closing.qr.custom_url ?? "" : "");
+    } else {
+      setClosingKey("contact");
+      setClosingHeading("Hacé tu pedido");
+      setClosingNote("");
+      setClosingShowLogo(true);
+      setClosingContacts(emptyClosingContacts());
+      setClosingQrEnabled(false);
+      setClosingQrTarget("whatsapp");
+      setClosingQrCustomUrl("");
+    }
+    setDuplicateHydrated(true);
+  }, [duplicateSourceId, duplicateTemplate, products, profiles, layouts, themes, coverLayouts, closingLayouts]);
+
+  useEffect(() => {
     if (!build || pollExpired || (build.status !== "queued" && build.status !== "running")) return;
     const controller = new AbortController();
     let requestInFlight = false;
@@ -356,6 +475,7 @@ export function CatalogBuilderPage() {
     ![normalizedCoverTitle, normalizedCoverSubtitle, normalizedCoverEdition].some((value) => COVER_TEXT_HAS_MARKUP.test(value))
   );
   const coverValid = !coverEnabled || (Boolean(selectedCoverLayout) && coverTextValid && (!selectedCoverLayout?.requires_hero || Boolean(coverHero)));
+  const coverLogoValid = !duplicateSourceId || !coverEnabled || !showPublisherLogo || Boolean(selectedProfile?.logo_url);
   const normalizedClosingHeading = closingHeading.trim().replace(/\s+/g, " ");
   const normalizedClosingNote = closingNote.trim().replace(/\s+/g, " ");
   const effectiveClosingValue = (key: ClosingContactKey): string => {
@@ -382,6 +502,7 @@ export function CatalogBuilderPage() {
     normalizedClosingHeading.length + normalizedClosingNote.length + enabledClosingKeys.reduce((count, key) => count + effectiveClosingValue(key).length, 0) <= 900 &&
     Boolean(normalizedClosingHeading || normalizedClosingNote || enabledClosingKeys.length || closingQrEnabled) &&
     (!selectedClosingLayout?.requires_contact || enabledClosingKeys.length > 0));
+  const closingLogoValid = !duplicateSourceId || !closingEnabled || !closingShowLogo || Boolean(selectedProfile?.logo_url);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allSelectedReady = selectedIds.every((id) => selectedProducts[id]?.readiness.ready);
   const readyCount = products?.filter((product) => product.readiness.ready).length ?? 0;
@@ -487,7 +608,8 @@ export function CatalogBuilderPage() {
   const handleCreate = async () => {
     if (
       submittingRef.current || selectedIds.length === 0 ||
-      !brandProfileId || !selectedLayout || !selectedTheme || !paletteValid || !coverValid || !closingValid || isUploadingCover
+      !brandProfileId || !selectedLayout || !selectedTheme || !paletteValid || paletteNeedsChoice || !coverValid || !coverLogoValid || !closingValid || !closingLogoValid || isUploadingCover ||
+      (duplicateSourceId !== null && !duplicateHydrated)
     ) return;
     submittingRef.current = true;
     setIsCreating(true);
@@ -516,6 +638,7 @@ export function CatalogBuilderPage() {
     } as CatalogClosingInput : { enabled: false };
     const choices = {
       product_ids: [...selectedIds],
+      ...(duplicateSourceId ? { source_build_id: duplicateSourceId } : {}),
       catalog_brand_profile_id: brandProfileId,
       layout_key: selectedLayout.key,
       layout_version: selectedLayout.version,
@@ -530,6 +653,7 @@ export function CatalogBuilderPage() {
     const pending = pendingCreateRef.current;
     const input: CatalogBuildInput = pending && JSON.stringify({
       product_ids: pending.product_ids,
+      source_build_id: pending.source_build_id,
       catalog_brand_profile_id: pending.catalog_brand_profile_id,
       layout_key: pending.layout_key,
       layout_version: pending.layout_version,
@@ -550,6 +674,9 @@ export function CatalogBuilderPage() {
       setPollExpired(false);
       setBuild(next);
       rememberBuildId(next.id);
+      setDuplicateSourceId(null);
+      setDuplicateTemplate(null);
+      setDuplicateHydrated(false);
       pendingCreateRef.current = null;
     } catch (caught: unknown) {
       const apiError = caught as ApiError;
@@ -585,7 +712,40 @@ export function CatalogBuilderPage() {
     }
   };
 
-  const canCreate = selectedIds.length > 0 && Boolean(brandProfileId && selectedLayout && selectedTheme && paletteValid && coverValid && closingValid && !isUploadingCover);
+  const startFresh = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("duplicateFrom");
+    window.history.replaceState(window.history.state, "", url);
+    setDuplicateSourceId(null);
+    setDuplicateTemplate(null);
+    setDuplicateError(null);
+    setDuplicateHydrated(false);
+    setPaletteNeedsChoice(false);
+    hydratedSourceRef.current = null;
+    pendingCreateRef.current = null;
+    setSelectedIds([]);
+    setSelectedProducts({});
+    setSearch("");
+    setReadinessFilter("all");
+    setEditorialProductId(null);
+    setError(null);
+    setBrandProfileId(profiles?.[0]?.id ?? "");
+    setLayoutKey(layouts?.find((item) => item.key === "classic")?.key ?? layouts?.[0]?.key ?? "classic");
+    setThemeKey(themes?.find((item) => item.key === "minimal")?.key ?? themes?.[0]?.key ?? "minimal");
+    setPrimaryOverride(null);
+    setAccentOverride(null);
+    resetCover();
+    resetClosing();
+    setBuildError(null);
+  };
+
+  const canCreate = selectedIds.length > 0 && Boolean(brandProfileId && selectedLayout && selectedTheme && paletteValid && !paletteNeedsChoice && coverValid && coverLogoValid && closingValid && closingLogoValid && !isUploadingCover && (!duplicateSourceId || duplicateHydrated));
+
+  if (duplicateSourceId && !duplicateHydrated) {
+    return <main className="builder-shell"><header className="page-header"><p className="eyebrow">Catalog workspace</p><h1>Catalog Builder</h1></header>
+      {duplicateError ? <div className="notice notice-error" role="alert">{duplicateError} <button type="button" onClick={startFresh}>Start fresh</button></div>
+        : <div className="state-panel" role="status">Preparing draft from historical catalog…</div>}</main>;
+  }
 
   return (
     <main className="builder-shell">
@@ -595,6 +755,30 @@ export function CatalogBuilderPage() {
         <p>Choose ready products and presentation settings, then generate a PDF catalog.</p>
         <a className="builder-history-link" href="/catalogs">View catalog history</a>
       </header>
+
+      {urlConflict && <div className="notice" role="status">Both build and duplicateFrom were supplied. The saved build takes precedence; no duplicate draft was loaded.</div>}
+      {duplicateSourceId && duplicateTemplate && <section className="duplicate-banner" aria-label="New catalog draft">
+        <div><p className="section-kicker">New catalog draft</p><h2>Based on catalog from {new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(duplicateTemplate.source.created_at))}</h2>
+          <p>Product selection and presentation settings are a starting point. Current Product, price, category, copy, image and Publisher data will be used when you create the new catalog.</p>
+          <p>Historical products: {duplicateTemplate.source.historical_product_count ?? "—"} · Selected now: {selectedIds.length} · Need attention: {duplicateTemplate.products.filter((item) => item.status !== "ready").length}</p></div>
+        <div className="duplicate-actions"><a href={`/catalogs/${duplicateSourceId}`}>View source</a><button type="button" onClick={startFresh}>Start fresh</button></div>
+      </section>}
+      {duplicateSourceId && duplicateTemplate && (duplicateTemplate.products.some((item) => item.status !== "ready") || duplicateTemplate.warnings.length > 0 || duplicateTemplate.defaults_applied.length > 0 || !coverLogoValid || !closingLogoValid) &&
+        <section className="duplicate-attention" aria-label="Needs attention"><h2>Needs attention</h2>
+          {duplicateTemplate.products.filter((item) => item.status !== "ready").map((item) => <div className="duplicate-attention-item" key={item.product_id}>
+            <strong>{item.status === "unavailable" ? `${item.historical_brand_name} — ${item.historical_name}` : `${item.current_brand_name} — ${item.current_name}`}</strong>
+            <span>{item.status === "unavailable" ? "Previously included, no longer available." : "Previously included, currently not ready."}</span>
+            {item.blockers.length > 0 && <ul>{item.blockers.map((blocker) => <li key={blocker.code}>{blocker.message}</li>)}</ul>}
+            {item.status === "not_ready" && <button type="button" onClick={() => setEditorialProductId(item.product_id)}>Edit Product</button>}
+          </div>)}
+          {duplicateTemplate.warnings.filter((item) => item.code !== "product_not_ready" && item.code !== "product_unavailable").map((item, index) => <p key={`${item.code}-${item.field}-${index}`}>{duplicateNotice(item.code)}</p>)}
+          {(!coverLogoValid || !closingLogoValid) && <p>The selected Publisher has no logo. Choose a Publisher with a logo or turn off Show publisher logo before creating.</p>}
+          {duplicateTemplate.defaults_applied.length > 0 && <p className="duplicate-defaults">This source predates {duplicateTemplate.defaults_applied.map((item) => item.field).join(", ")}; those settings started at current Builder defaults.</p>}
+          {paletteNeedsChoice && duplicateTemplate.palette && <div className="duplicate-palette-choice"><p>Historical resolved pair: {duplicateTemplate.palette.historical_resolved_primary} / {duplicateTemplate.palette.historical_resolved_accent}</p>
+            <button type="button" onClick={() => { setPrimaryOverride(null); setAccentOverride(null); setPaletteNeedsChoice(false); }}>Use current Publisher colors</button>
+            <button type="button" onClick={() => { setPrimaryOverride(duplicateTemplate.palette!.historical_resolved_primary); setAccentOverride(duplicateTemplate.palette!.historical_resolved_accent); setPaletteNeedsChoice(false); }}>Use historical pair as custom</button>
+          </div>}
+        </section>}
 
       <section className="configuration-bar" aria-labelledby="configuration-title">
         <div>
@@ -608,6 +792,7 @@ export function CatalogBuilderPage() {
             onChange={(event) => setBrandProfileId(event.target.value)}
             disabled={!profiles?.length}
           >
+            {duplicateSourceId && !brandProfileId && <option value="">Select a Publisher</option>}
             {!profiles?.length && <option value="">No active brand profiles</option>}
             {profiles?.map((profile) => (
               <option value={profile.id} key={profile.id}>{profile.display_name}</option>
@@ -621,6 +806,7 @@ export function CatalogBuilderPage() {
             onChange={(event) => setLayoutKey(event.target.value as CatalogLayout["key"])}
             disabled={!layouts?.length}
           >
+            {duplicateSourceId && !layoutKey && <option value="">Select a Layout</option>}
             {layouts?.map((layout) => (
               <option value={layout.key} key={`${layout.key}-${layout.version}`}>
                 {layout.display_label}
@@ -640,19 +826,19 @@ export function CatalogBuilderPage() {
         </div>
         <div className="palette-control" role="group" aria-label="Catalog palette">
           <strong>Palette</strong>
-          <p>{customPalette ? "Custom palette" : `Using ${selectedProfile?.display_name ?? "publisher"} colors`}</p>
+          <p>{paletteNeedsChoice ? "Palette selection required; current Publisher colors are a preview only." : customPalette ? "Custom palette" : `Using ${selectedProfile?.display_name ?? "publisher"} colors`}</p>
           <div className="palette-fields">
             <label>Primary
-              <input aria-label="Primary color picker" type="color" value={VALID_COLOR.test(primaryColor) ? primaryColor : selectedProfile?.primary_color ?? "#000000"} onChange={(event) => setPrimaryOverride(event.target.value.toUpperCase())} />
-              <input aria-label="Primary hex" type="text" value={primaryColor} maxLength={7} onChange={(event) => setPrimaryOverride(event.target.value)} />
+              <input aria-label="Primary color picker" type="color" value={VALID_COLOR.test(primaryColor) ? primaryColor : selectedProfile?.primary_color ?? "#000000"} onChange={(event) => { setPrimaryOverride(event.target.value.toUpperCase()); setPaletteNeedsChoice(false); }} />
+              <input aria-label="Primary hex" type="text" value={primaryColor} maxLength={7} onChange={(event) => { setPrimaryOverride(event.target.value); setPaletteNeedsChoice(false); }} />
             </label>
             <label>Accent
-              <input aria-label="Accent color picker" type="color" value={VALID_COLOR.test(accentColor) ? accentColor : selectedProfile?.accent_color ?? "#000000"} onChange={(event) => setAccentOverride(event.target.value.toUpperCase())} />
-              <input aria-label="Accent hex" type="text" value={accentColor} maxLength={7} onChange={(event) => setAccentOverride(event.target.value)} />
+              <input aria-label="Accent color picker" type="color" value={VALID_COLOR.test(accentColor) ? accentColor : selectedProfile?.accent_color ?? "#000000"} onChange={(event) => { setAccentOverride(event.target.value); setPaletteNeedsChoice(false); }} />
+              <input aria-label="Accent hex" type="text" value={accentColor} maxLength={7} onChange={(event) => { setAccentOverride(event.target.value); setPaletteNeedsChoice(false); }} />
             </label>
           </div>
           {!paletteValid && <p className="field-error" role="alert">Use #RRGGBB for both palette colors.</p>}
-          {customPalette && <button type="button" onClick={() => { setPrimaryOverride(null); setAccentOverride(null); }}>Reset to publisher colors</button>}
+          {customPalette && <button type="button" onClick={() => { setPrimaryOverride(null); setAccentOverride(null); setPaletteNeedsChoice(false); }}>Reset to publisher colors</button>}
         </div>
         <div className="cover-control" role="group" aria-label="Catalog cover">
           <div className="cover-control-heading">
@@ -674,7 +860,7 @@ export function CatalogBuilderPage() {
               <label>Subtitle (optional)<input type="text" value={coverSubtitle} maxLength={180} onChange={(event) => setCoverSubtitle(event.target.value)} /></label>
               <label>Edition (optional)<input type="text" value={coverEdition} maxLength={60} onChange={(event) => setCoverEdition(event.target.value)} /></label>
             </div>
-            <label className="cover-logo-control"><input type="checkbox" checked={showPublisherLogo && Boolean(selectedProfile?.logo_url)} disabled={!selectedProfile?.logo_url} onChange={(event) => setShowPublisherLogo(event.target.checked)} /> Show publisher logo{!selectedProfile?.logo_url ? " (no logo available)" : ""}</label>
+            <label className="cover-logo-control"><input type="checkbox" checked={duplicateSourceId ? showPublisherLogo : showPublisherLogo && Boolean(selectedProfile?.logo_url)} disabled={!duplicateSourceId && !selectedProfile?.logo_url} onChange={(event) => setShowPublisherLogo(event.target.checked)} /> Show publisher logo{!selectedProfile?.logo_url ? " (no logo available)" : ""}</label>
             <div className="cover-upload">
               <label>Hero image (optional for Minimal/Editorial)
                 <input type="file" accept="image/png,image/jpeg,image/webp" disabled={isUploadingCover} onChange={(event) => { void handleHeroUpload(event.target.files?.[0]); event.target.value = ""; }} />
@@ -718,7 +904,7 @@ export function CatalogBuilderPage() {
               <label>Heading (optional)<input type="text" maxLength={80} value={closingHeading} onChange={(event) => setClosingHeading(event.target.value)} /></label>
               <label>Short note (optional)<textarea maxLength={300} rows={3} value={closingNote} onChange={(event) => setClosingNote(event.target.value)} /></label>
             </div>
-            <label className="cover-logo-control"><input type="checkbox" checked={closingShowLogo && Boolean(selectedProfile?.logo_url)} disabled={!selectedProfile?.logo_url} onChange={(event) => setClosingShowLogo(event.target.checked)} /> Show publisher logo{!selectedProfile?.logo_url ? " (no logo available)" : ""}</label>
+            <label className="cover-logo-control"><input type="checkbox" checked={duplicateSourceId ? closingShowLogo : closingShowLogo && Boolean(selectedProfile?.logo_url)} disabled={!duplicateSourceId && !selectedProfile?.logo_url} onChange={(event) => setClosingShowLogo(event.target.checked)} /> Show publisher logo{!selectedProfile?.logo_url ? " (no logo available)" : ""}</label>
             <fieldset className="closing-contacts">
               <legend>Contact methods</legend>
               <p>Publisher contact and social values come from the selected frozen profile unless you override them here. Other methods are for this build only.</p>
@@ -830,7 +1016,7 @@ export function CatalogBuilderPage() {
             <div><dt>Brand</dt><dd>{selectedProfile?.display_name ?? "Not selected"}</dd></div>
             <div><dt>Layout</dt><dd>{selectedLayout?.display_label ?? "Not available"}</dd></div>
             <div><dt>Theme</dt><dd>{selectedTheme?.display_name ?? "Not available"}</dd></div>
-            <div><dt>Palette</dt><dd>{customPalette ? "Custom" : "Publisher colors"}</dd></div>
+            <div><dt>Palette</dt><dd>{paletteNeedsChoice ? "Selection required" : customPalette ? "Custom" : "Publisher colors"}</dd></div>
             <div><dt>Cover</dt><dd>{coverEnabled ? selectedCoverLayout?.display_name ?? "Not available" : "None"}</dd></div>
             {coverEnabled && <div><dt>Title</dt><dd>{normalizedCoverTitle || "—"}</dd></div>}
             {coverEnabled && normalizedCoverEdition && <div><dt>Edition</dt><dd>{normalizedCoverEdition}</dd></div>}
@@ -863,6 +1049,7 @@ export function CatalogBuilderPage() {
                 {build.status === "failed" && "Catalog generation failed"}
               </h3>
               <p>
+                {build.source_build_id && <span>Based on historical catalog · </span>}
                 {build.product_count} {build.product_count === 1 ? "Product" : "Products"}
                 {" · "}{build.catalog_brand_display_name}
                 {" · "}{build.layout_display_label}

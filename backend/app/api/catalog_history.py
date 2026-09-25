@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.domain.catalog_history import CatalogHistoryDetail, CatalogHistoryOptions, CatalogHistoryPage
+from app.domain.catalog_duplication import CatalogDuplicateTemplate
+from app.services.catalog_duplication import UnknownDuplicateSourceError, get_catalog_duplicate_template
 from app.services.catalog_history import (
     UnknownHistoryBuildError, catalog_history_options,
     get_catalog_history_detail, list_catalog_history,
@@ -46,4 +48,15 @@ def catalog_detail(
     try:
         return get_catalog_history_detail(session, build_id)
     except UnknownHistoryBuildError as exc:
+        raise HTTPException(404, "Catalog not found.") from exc
+
+
+@router.get("/{build_id}/duplicate-template", response_model=CatalogDuplicateTemplate)
+def duplicate_template(
+    build_id: uuid.UUID,
+    session: Annotated[Session, Depends(get_db)],
+) -> CatalogDuplicateTemplate:
+    try:
+        return get_catalog_duplicate_template(session, build_id)
+    except UnknownDuplicateSourceError as exc:
         raise HTTPException(404, "Catalog not found.") from exc

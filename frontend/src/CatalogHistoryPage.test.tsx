@@ -43,7 +43,8 @@ function page(items: CatalogHistoryItem[], overrides: Partial<HistoryPage> = {})
 
 function detail(overrides: Partial<CatalogHistoryDetail> = {}): CatalogHistoryDetail {
   return {
-    ...item(), snapshot_schema_version: "catalog-snapshot-v1", currency: "PYG", as_of: "2026-09-23T12:00:00Z",
+    ...item(), can_duplicate: true, duplicate_unavailable_reason: null, source_build_id: null, source_build_created_at: null,
+    snapshot_schema_version: "catalog-snapshot-v1", currency: "PYG", as_of: "2026-09-23T12:00:00Z",
     products: [{ category_name: "Proteínas", brand_name: "LANDERFIT", product_name: "Premium Whey", short_description: null,
       variants: [{ external_sku: "WHEY-1", flavor: "Vanilla", size_value: "2", size_unit: "LB", servings: null, price_amount: "350000", price_currency: "PYG" }] }],
     render_attempts: [{ attempt: 2, status: "succeeded", started_at: "2026-09-23T12:00:00Z", completed_at: "2026-09-23T12:01:00Z", page_count: 6, error: null, render_version: "catalog.render.v5" },
@@ -122,9 +123,21 @@ it("loads detail directly with frozen values and no mutation controls", async ()
   expect(screen.getByText(/How to order/)).toBeInTheDocument();
   expect(screen.getByText(/Attempt 1 · failed/)).toBeInTheDocument();
   expect(screen.getAllByRole("link", { name: "Preview PDF" }).length).toBeGreaterThan(0);
+  expect(screen.getByRole("link", { name: "Duplicate as new draft" })).toHaveAttribute("href", "/catalog-builder?duplicateFrom=11111111-1111-1111-1111-111111111111");
   for (const action of ["Edit", "Delete", "Rename", "Duplicate", "Rerender"]) {
     expect(screen.queryByRole("button", { name: action })).not.toBeInTheDocument();
   }
+});
+
+it("disables duplication for an invalid source and links a new Build to its source", async () => {
+  mocks.fetchCatalogHistoryDetail.mockResolvedValueOnce(detail({ can_duplicate: false, duplicate_unavailable_reason: "invalid_snapshot" }));
+  const view = renderHistory("/catalogs/11111111-1111-1111-1111-111111111111");
+  expect(await screen.findByText(/Duplicate unavailable/)).toHaveTextContent("historical Snapshot is invalid");
+  expect(screen.queryByRole("link", { name: "Duplicate as new draft" })).not.toBeInTheDocument();
+  view.unmount();
+  mocks.fetchCatalogHistoryDetail.mockResolvedValueOnce(detail({ source_build_id: "22222222-2222-2222-2222-222222222222", source_build_created_at: "2026-09-22T12:00:00Z" }));
+  renderHistory("/catalogs/11111111-1111-1111-1111-111111111111");
+  expect(await screen.findByRole("link", { name: /catalog from/ })).toHaveAttribute("href", "/catalogs/22222222-2222-2222-2222-222222222222");
 });
 
 it("shows legacy, missing artifact, failed and unknown detail safely", async () => {

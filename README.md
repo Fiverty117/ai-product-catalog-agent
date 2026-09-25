@@ -55,6 +55,46 @@ PDF can be previewed or downloaded through the existing Builder artifact
 endpoint. Historical Builds are read-only; the Library never changes their
 configuration, content or PDF.
 
+From a valid History detail, **Duplicate as new draft** opens the existing
+Builder with previously selected Products and presentation settings as a
+starting point. It does not create a Build. Ready Products are selected using
+current data; Products that are no longer ready or available appear under
+Needs attention. The next explicit **Create catalog** action produces a new
+Snapshot from current Product names, categories, approved prices, copy, media,
+publishable SKUs and Publisher branding. The old Snapshot and PDF remain
+unchanged. Failed or running Builds can also be duplicated when their frozen
+configuration and Snapshot are valid; a PDF is not required.
+
+The draft is not saved. Refreshing a `?duplicateFrom=` URL reloads the source
+template and discards unsaved edits. **Start fresh** removes that source and
+resets the Builder. If both `build` and `duplicateFrom` are present, `build`
+takes precedence. Old custom palettes and Publisher contact overrides that
+predate choice-provenance metadata need an explicit review in the Builder;
+resolved historical values are not silently treated as original choices.
+
+Manual 14B smoke using an existing v5 catalog (this creates a real new Build
+only at step 9):
+
+1. Run `.\start.ps1 -FrontendPort 5184` and open `/catalogs`.
+2. Open a v5 catalog; record its Build ID, Product count, Layout, Theme,
+   Cover and Closing.
+3. Click **Duplicate as new draft**. Confirm the source banner and that
+   currently Ready Products are selected.
+4. Confirm History count has not changed and current Product cards show current
+   values, not frozen prices.
+5. Review Needs attention, Layout, Theme, Palette, Cover, Hero and Closing.
+6. Edit a title, edition or Theme to confirm the draft is editable.
+7. If any required choice is unresolved, select it explicitly.
+8. Confirm the intended current Product/Publisher choices before publishing.
+9. Click **Create catalog** once; the URL should change to `?build=<new-id>`.
+10. Open the new History detail, verify its source link and current pricing,
+    preview its PDF, and confirm the old Build is unchanged.
+11. Run `.\stop.ps1`.
+
+Optionally open a v2 History record and click Duplicate without creating a
+Build. Theme should be a marked current default; Cover and Closing should
+start disabled. Click **Start fresh** afterward.
+
 ## Project status
 
 **Architecture v1.0 frozen. Initial repository scaffold created.**

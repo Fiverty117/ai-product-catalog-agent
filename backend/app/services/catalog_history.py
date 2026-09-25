@@ -176,7 +176,8 @@ def _project(
     job = build.job
     payload = _payload(job)
     if payload is not None and (
-        payload.catalog_snapshot_id != build.catalog_snapshot_id
+        build.catalog_snapshot is None
+        or payload.catalog_snapshot_id != build.catalog_snapshot_id
         or payload.snapshot_content_hash.lower() != build.catalog_snapshot.content_hash.lower()
     ):
         payload = None
@@ -278,8 +279,22 @@ def get_catalog_history_detail(
         error=_public_render_error(run.sanitized_error) if run.status is ExtractionRunStatus.FAILED else None,
         render_version=build.job.job_type,
     ) for index, run in enumerate(runs)]
+    source_build = session.get(CatalogBuild, build.source_build_id) if build.source_build_id else None
+    source_payload = _payload(build.job)
+    if source_payload is not None and (
+        build.catalog_snapshot is None
+        or source_payload.catalog_snapshot_id != build.catalog_snapshot_id
+        or source_payload.snapshot_content_hash.lower() != build.catalog_snapshot.content_hash.lower()
+    ):
+        source_payload = None
     return CatalogHistoryDetail(
         **summary.model_dump(),
+        can_duplicate=summary.historical_data_available,
+        duplicate_unavailable_reason=(
+            "unsupported_configuration" if source_payload is None else "invalid_snapshot"
+        ) if not summary.historical_data_available else None,
+        source_build_id=build.source_build_id,
+        source_build_created_at=source_build.created_at if source_build else None,
         snapshot_schema_version=snapshot.schema_version if snapshot else None,
         currency=snapshot.currency if snapshot else None,
         as_of=snapshot.as_of if snapshot else None,

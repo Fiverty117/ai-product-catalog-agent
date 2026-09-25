@@ -103,6 +103,10 @@ class CatalogHistoryItem(StrictSchema):
 
 
 class CatalogHistoryDetail(CatalogHistoryItem):
+    can_duplicate: bool = False
+    duplicate_unavailable_reason: Literal["invalid_snapshot", "unsupported_configuration"] | None = None
+    source_build_id: uuid.UUID | None = None
+    source_build_created_at: datetime | None = None
     snapshot_schema_version: str | None
     currency: str | None
     as_of: datetime | None
