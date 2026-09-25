@@ -1,9 +1,14 @@
 from collections.abc import Iterator
+import os
 
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 DATABASE_URL = "sqlite:///./catalog.db"
+
+
+def effective_database_url() -> str:
+    return os.environ.get("DATABASE_URL", DATABASE_URL)
 
 
 def create_sqlite_engine(database_url: str = DATABASE_URL) -> Engine:
@@ -19,7 +24,7 @@ def create_sqlite_engine(database_url: str = DATABASE_URL) -> Engine:
     return engine
 
 
-engine = create_sqlite_engine()
+engine = create_sqlite_engine(effective_database_url())
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 

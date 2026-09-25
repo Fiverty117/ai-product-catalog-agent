@@ -1,11 +1,10 @@
 import argparse
-import os
 import time
 from datetime import timedelta
 
 from sqlalchemy.orm import sessionmaker
 
-from app.db.session import DATABASE_URL, create_sqlite_engine
+from app.db.session import create_sqlite_engine, effective_database_url
 from app.rendering.catalog_pdf import ChromiumCatalogPdfRenderer
 from app.services.catalog_rendering import CATALOG_RENDER_JOB_TYPE_V2, CATALOG_RENDER_JOB_TYPE_V3, CATALOG_RENDER_JOB_TYPE_V4, CATALOG_RENDER_JOB_TYPE_V5
 from app.workers.catalog_render_handler import catalog_render_handlers
@@ -29,7 +28,7 @@ def main() -> None:
     if args.stale_after_seconds <= 0:
         raise SystemExit("--stale-after-seconds must be positive")
 
-    engine = create_sqlite_engine(os.environ.get("DATABASE_URL", DATABASE_URL))
+    engine = create_sqlite_engine(effective_database_url())
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     worker = JobWorker(
         session_factory,

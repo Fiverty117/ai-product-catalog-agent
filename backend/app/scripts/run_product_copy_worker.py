@@ -1,12 +1,11 @@
 import argparse
-import os
 import time
 from datetime import timedelta
 
 from sqlalchemy.orm import sessionmaker
 
 from app.ai.openai_product_copy import OpenAIProductCopyProvider
-from app.db.session import DATABASE_URL, create_sqlite_engine
+from app.db.session import create_sqlite_engine, effective_database_url
 from app.services.product_copy import PRODUCT_COPY_JOB_TYPE
 from app.workers.job_worker import JobWorker
 from app.workers.product_copy_handler import ProductCopyJobHandler
@@ -30,7 +29,7 @@ def main() -> None:
         raise SystemExit("--stale-after-seconds must be positive")
 
     provider = OpenAIProductCopyProvider.from_environment()
-    engine = create_sqlite_engine(os.environ.get("DATABASE_URL", DATABASE_URL))
+    engine = create_sqlite_engine(effective_database_url())
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     worker = JobWorker(
         session_factory,

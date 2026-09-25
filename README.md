@@ -4,6 +4,47 @@ A practical AI-assisted catalog generation system for supplement and product bus
 
 The application takes one or more product photos per SKU, extracts visible product information, normalizes and classifies the data, creates a studio-style catalog image, supports human review and price entry, and generates a branded PDF catalog.
 
+## Local Quick Start (Windows PowerShell 5.1+)
+
+One-time setup: install Python 3.12+, Node.js/npm and the project dependencies. From the repository root:
+
+```powershell
+cd backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m playwright install chromium
+cd ..\frontend
+npm ci
+cd ..
+```
+
+For daily use, run `.\doctor.ps1`, then `.\start.ps1` and open
+`http://127.0.0.1:5174`. Check services with `.\status.ps1`; when finished,
+run `.\stop.ps1`. Startup upgrades the configured SQLite database to Alembic
+head before starting services. Doctor and status do not migrate it. Logs live in
+`.runtime/logs/<run-id>/`; `.runtime/` is ignored by Git.
+
+Defaults are backend `127.0.0.1:8001` and frontend `127.0.0.1:5174`.
+If either is occupied, the launcher refuses to start and **never stops the
+occupant**. Choose explicit ports, for example
+`.\start.ps1 -BackendPort 8002 -FrontendPort 5184`, and pass the same ports to
+`doctor.ps1`; Vite's API proxy follows the selected backend port automatically.
+The launcher binds loopback only and Vite uses a strict frontend port.
+
+`OPENAI_API_KEY` is optional for deterministic workflows. Configure it in your
+Windows Current User environment (or the launching PowerShell session) and
+restart the shell before starting to enable Product extraction, Product Copy
+and image enhancement workers. Without it, those three workers are skipped;
+manual Product/Category management and catalog rendering remain available.
+The key is never stored in runtime state or printed. An optional `DATABASE_URL`
+must point to a file-backed SQLite database; otherwise all Python processes and
+Alembic use `backend/catalog.db`. Relative SQLite URLs resolve from `backend`.
+Neither startup nor doctor installs dependencies or creates sample Products.
+
+For troubleshooting, use `doctor.ps1`, inspect the run-scoped logs, stop any
+partial launcher-owned runtime with `stop.ps1`, and retry. The individual
+commands below remain available for debugging, not ordinary daily operation.
+
 ## Project status
 
 **Architecture v1.0 frozen. Initial repository scaffold created.**
@@ -108,14 +149,9 @@ They are related, but they are **not the same thing**.
 
 ## Current milestone
 
-The next implementation block is the **domain contract**:
-
-1. Brand / Product / SKU / Photo relationships
-2. per-step processing state
-3. field provenance and human locks
-4. price history
-5. job queue records
-6. catalog snapshot model
+The local Product, Category and Catalog workspaces are implemented. The
+one-command launcher provides repeatable local startup without changing the
+frozen Architecture v1.0 or adding a hosted service.
 
 No production credentials, real customer data, or private catalog assets should be committed to this repository.
 
@@ -198,7 +234,7 @@ so run these commands only when you are ready for the manual smoke:
 cd backend
 .\.venv\Scripts\python.exe -m playwright install chromium
 .\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
 
 In a second terminal, from `backend`, start the existing durable JobWorker

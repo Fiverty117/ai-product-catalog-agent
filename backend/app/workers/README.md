@@ -17,7 +17,7 @@ python -m playwright install chromium
 python -m app.scripts.run_catalog_render_worker
 ```
 
-This worker continuously polls only `catalog.render.v2` Jobs. Use `--once` for
+This worker continuously polls `catalog.render.v2/v3/v4/v5` Jobs. Use `--once` for
 one eligible claim during a focused smoke test.
 
 For the local Product Copy editorial queue, set `OPENAI_API_KEY` and run from

@@ -38,6 +38,7 @@ storage/catalogs/*
 coverage.xml
 htmlcov/
 tmp/
+.runtime/
 
 backend/catalog.db-shm
 backend/catalog.db-wal
