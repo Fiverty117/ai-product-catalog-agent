@@ -1,6 +1,5 @@
 """Non-canonical product intake; extraction runs remain immutable observations."""
 
-import hashlib
 import uuid
 from pathlib import Path
 
@@ -19,7 +18,8 @@ from app.domain.product_intake import (
 from app.domain.schemas import ProductExtractionJobPayload, ProductExtractionResult
 from app.services.extraction import PRODUCT_EXTRACTION_JOB_TYPE, PRODUCT_EXTRACTION_SCHEMA_VERSION
 from app.services.jobs import enqueue_job
-from app.services.photo_intake import inspect_supported_image, register_original_photo
+from app.services.photo_intake import register_original_photo
+from app.services.image_processing import resolve_photo_for_processing, PhotoIntakeError, PhotoStorageIntegrityError
 
 
 class UnknownIntakeError(ValueError):
@@ -221,23 +221,11 @@ def resolve_intake_photo(session: Session, item: ProductIntakeItem, photo_id: uu
     allowed_product_id = item.promotion.product_id if item.promotion else None
     if photo.product_id != allowed_product_id or photo.sku_id is not None or not photo.is_original:
         raise IntakeConflictError("Source photo ownership is invalid for intake.")
-    extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(photo.mime_type)
-    if extension is None:
-        raise IntakeAssetError("Source photo is unavailable.")
-    expected = originals_dir.resolve() / photo.checksum_sha256[:2] / f"{photo.checksum_sha256}{extension}"
-    path = Path(photo.file_path).resolve()
-    if path != expected or not path.is_file():
-        raise IntakeAssetError("Source photo is unavailable.")
-    content = path.read_bytes()
-    if hashlib.sha256(content).hexdigest() != photo.checksum_sha256:
-        raise IntakeAssetError("Source photo failed integrity verification.")
     try:
-        mime, _, width, height = inspect_supported_image(content)
-    except ValueError as exc:
-        raise IntakeAssetError("Source photo failed image verification.") from exc
-    if (mime, width, height) != (photo.mime_type, photo.width, photo.height):
-        raise IntakeAssetError("Source photo failed metadata verification.")
-    return path, photo.mime_type
+        asset = resolve_photo_for_processing(photo, originals_dir=originals_dir)
+    except (OSError, PhotoIntakeError, PhotoStorageIntegrityError) as exc:
+        raise IntakeAssetError("Source photo is unavailable or failed integrity verification.") from exc
+    return asset.file_path, asset.mime_type
 
 
 def _require_not_promoted(item: ProductIntakeItem) -> None:

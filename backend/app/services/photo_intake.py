@@ -1,66 +1,22 @@
 import hashlib
-import os
-import tempfile
 import uuid
-from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from app.db.models import Photo, SKU
 from app.domain.enums import PhotoRole
+from app.services.image_processing import (
+    PhotoIntakeError, UnsupportedPhotoFormatError, PhotoStorageIntegrityError,
+    SUPPORTED_FORMATS, inspect_supported_image, inspect_original_image,
+    store_immutable_bytes, ensure_processing_representation,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_ORIGINALS_DIR = PROJECT_ROOT / "storage" / "originals"
 
-SUPPORTED_FORMATS = {
-    "JPEG": ("image/jpeg", ".jpg"),
-    "PNG": ("image/png", ".png"),
-    "WEBP": ("image/webp", ".webp"),
-}
-
-
-class PhotoIntakeError(ValueError):
-    pass
-
-
-class UnsupportedPhotoFormatError(PhotoIntakeError):
-    pass
-
-
 class UnknownSKUError(PhotoIntakeError):
     pass
-
-
-class PhotoStorageIntegrityError(RuntimeError):
-    pass
-
-
-def inspect_supported_image(image_bytes: bytes) -> tuple[str, str, int, int]:
-    if not image_bytes:
-        raise PhotoIntakeError("uploaded image is empty")
-
-    try:
-        with Image.open(BytesIO(image_bytes)) as image:
-            detected_format = image.format
-            width, height = image.size
-            image.verify()
-
-        with Image.open(BytesIO(image_bytes)) as image:
-            image.load()
-    except (Image.DecompressionBombError, UnidentifiedImageError, OSError, SyntaxError) as exc:
-        raise PhotoIntakeError("uploaded file is not a decodable image") from exc
-
-    if detected_format not in SUPPORTED_FORMATS:
-        raise UnsupportedPhotoFormatError(
-            f"unsupported image format: {detected_format or 'unknown'}"
-        )
-    if width <= 0 or height <= 0:
-        raise PhotoIntakeError("uploaded image has invalid dimensions")
-
-    mime_type, extension = SUPPORTED_FORMATS[detected_format]
-    return mime_type, extension, width, height
 
 
 def _store_original_bytes(
@@ -75,32 +31,9 @@ def _store_original_bytes(
         / checksum_sha256[:2]
         / f"{checksum_sha256}{extension}"
     )
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
-    if destination.exists():
-        stored_checksum = hashlib.sha256(destination.read_bytes()).hexdigest()
-        if stored_checksum != checksum_sha256:
-            raise PhotoStorageIntegrityError(
-                f"stored original does not match its checksum identity: {destination}"
-            )
-        return destination
-
-    file_descriptor, temporary_name = tempfile.mkstemp(
-        dir=destination.parent,
-        prefix=".photo-upload-",
-        suffix=".tmp",
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(file_descriptor, "wb") as temporary_file:
-            temporary_file.write(image_bytes)
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        os.replace(temporary_path, destination)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-
-    return destination
+    if not destination.resolve().is_relative_to(originals_dir.resolve()):
+        raise PhotoStorageIntegrityError("original asset path is outside storage")
+    return store_immutable_bytes(image_bytes, destination, checksum_sha256)
 
 
 def register_original_photo(
@@ -125,7 +58,7 @@ def register_original_photo(
         if sku is None:
             raise UnknownSKUError(f"SKU not found: {sku_id}")
 
-    mime_type, extension, width, height = inspect_supported_image(image_bytes)
+    mime_type, extension, width, height = inspect_original_image(image_bytes)
     checksum_sha256 = hashlib.sha256(image_bytes).hexdigest()
     stored_path = _store_original_bytes(
         image_bytes,
@@ -133,6 +66,7 @@ def register_original_photo(
         extension=extension,
         originals_dir=originals_dir,
     )
+    ensure_processing_representation(image_bytes, stored_path, checksum_sha256)
 
     photo = Photo(
         sku=sku,

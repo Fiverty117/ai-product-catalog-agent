@@ -1,5 +1,4 @@
 """Read and mutate existing Product image review/presentation state."""
-import hashlib
 import uuid
 from pathlib import Path
 
@@ -22,7 +21,7 @@ from app.services.image_presentation import (
 )
 from app.services.image_enhancement import IMAGE_ENHANCEMENT_JOB_TYPE, enqueue_image_enhancement
 from app.services.jobs import JobRecoveryError, requeue_failed_job
-from app.services.photo_intake import PhotoIntakeError, inspect_supported_image
+from app.services.image_processing import resolve_photo_for_processing, PhotoIntakeError, PhotoStorageIntegrityError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -162,12 +161,9 @@ def _require_current_source(session: Session, product_id: uuid.UUID, photo_id: u
 
 def _source_valid(photo: Photo) -> bool:
     try:
-        content = _path(photo.file_path).read_bytes()
-        mime, _, width, height = inspect_supported_image(content)
-        return (hashlib.sha256(content).hexdigest() == photo.checksum_sha256.lower()
-                and mime == photo.mime_type and width == photo.width and height == photo.height
-                and len(content) == photo.file_size_bytes)
-    except (OSError, PhotoIntakeError):
+        resolve_photo_for_processing(photo)
+        return True
+    except (OSError, PhotoIntakeError, PhotoStorageIntegrityError):
         return False
 
 
@@ -191,7 +187,11 @@ def select_product_image_presentation(session: Session, product_id: uuid.UUID, p
 
 def resolve_product_photo_asset(session: Session, product_id: uuid.UUID, photo_id: uuid.UUID) -> tuple[Path, str]:
     photo = _require_product_photo(session, product_id, photo_id)
-    return _available_path(photo.file_path), photo.mime_type
+    try:
+        asset = resolve_photo_for_processing(photo)
+    except (OSError, PhotoIntakeError, PhotoStorageIntegrityError) as exc:
+        raise ProductImageAssetUnavailableError("Image asset is unavailable or invalid.") from exc
+    return asset.file_path, asset.mime_type
 
 
 def resolve_product_derived_asset(session: Session, product_id: uuid.UUID, derived_image_id: uuid.UUID) -> tuple[Path, str]:

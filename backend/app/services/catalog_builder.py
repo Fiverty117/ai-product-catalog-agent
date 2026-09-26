@@ -171,6 +171,8 @@ def resolve_catalog_builder_product_image(
         session,
         photo_id=readiness.hero_photo_id,
     )
+    if not presentation.backing_asset_available:
+        raise CatalogBuilderImageUnavailableError("Product image is unavailable")
     path = Path(presentation.file_path)
     if not path.is_absolute():
         path = Path(__file__).resolve().parents[3] / path

@@ -487,10 +487,14 @@ class FrozenCatalogAsset(StrictSchema):
             "image/jpeg": ".jpg",
             "image/png": ".png",
             "image/webp": ".webp",
+            "image/mpo": ".mpo",
         }
         if (
             len(parts) != 3
-            or parts[0] not in {"originals", "processed"}
+            or parts[0] not in {"originals", "processed", "normalized"}
+            or self.mime_type not in expected_extensions
+            or (self.mime_type == "image/mpo" and parts[0] != "originals")
+            or (parts[0] == "normalized" and self.mime_type != "image/jpeg")
             or parts[1] != self.checksum_sha256[:2].lower()
             or parts[2]
             != self.checksum_sha256.lower()
@@ -585,6 +589,7 @@ class CatalogHeroSnapshot(StrictSchema):
         if (
             self.presentation_type is PhotoPresentationAssetType.ORIGINAL
             and self.presentation_asset != self.source_original_asset
+            and self.source_original_asset.mime_type != "image/mpo"
         ):
             raise ValueError("original presentation asset must equal source asset")
         if not self.source_original_asset.storage_relative_path.startswith(
@@ -594,10 +599,13 @@ class CatalogHeroSnapshot(StrictSchema):
         expected_area = (
             "processed/"
             if self.presentation_type is PhotoPresentationAssetType.DERIVED
+            else "normalized/" if self.source_original_asset.mime_type == "image/mpo"
             else "originals/"
         )
         if not self.presentation_asset.storage_relative_path.startswith(expected_area):
             raise ValueError("presentation asset uses the wrong storage area")
+        if self.presentation_asset.mime_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise ValueError("presentation asset must be processing-safe")
         return self
 
 

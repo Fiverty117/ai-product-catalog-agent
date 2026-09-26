@@ -1,4 +1,3 @@
-import hashlib
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -28,6 +27,7 @@ from app.services.extraction import (
     mark_extraction_run_succeeded,
 )
 from app.services.jobs import PermanentJobError
+from app.services.image_processing import resolve_photo_for_processing, PhotoIntakeError, PhotoStorageIntegrityError
 from app.workers.job_worker import ClaimedJob
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -163,26 +163,17 @@ def product_extraction_handlers(
 
 
 def _load_verified_original(photo: Photo) -> VisionImage:
-    if not photo.is_original:
-        raise LocalPhotoAssetError("referenced photo is not an original asset")
-    path = Path(photo.file_path)
-    if not path.is_absolute():
-        path = PROJECT_ROOT / path
-    try:
-        content = path.read_bytes()
-    except OSError:
-        raise LocalPhotoAssetError("referenced original photo is unavailable") from None
-    actual_checksum = hashlib.sha256(content).hexdigest()
-    if actual_checksum != photo.checksum_sha256.lower():
-        raise LocalPhotoAssetError(
-            "referenced original photo failed checksum verification"
-        )
     if not photo.mime_type:
         raise LocalPhotoAssetError("referenced original photo has no MIME type")
+    try:
+        asset = resolve_photo_for_processing(photo)
+        content = asset.file_path.read_bytes()
+    except (OSError, PhotoIntakeError, PhotoStorageIntegrityError):
+        raise LocalPhotoAssetError("referenced original photo is unavailable or failed verification") from None
     return VisionImage(
         content=content,
-        mime_type=photo.mime_type,
-        checksum_sha256=actual_checksum,
+        mime_type=asset.mime_type,
+        checksum_sha256=asset.checksum_sha256,
     )
 
 

@@ -27,6 +27,7 @@ from app.domain.schemas import (
     PhotoPresentationSelection,
 )
 from app.services.photo_intake import PhotoIntakeError, inspect_supported_image
+from app.services.image_processing import resolve_photo_for_processing, PhotoStorageIntegrityError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -309,16 +310,20 @@ def _original_presentation(
     *,
     warnings: list[PhotoPresentationWarning] | None = None,
 ) -> EffectivePhotoPresentation:
+    try:
+        asset = resolve_photo_for_processing(photo)
+    except (OSError, PhotoIntakeError, PhotoStorageIntegrityError):
+        asset = None
     return EffectivePhotoPresentation(
         source_photo_id=photo.id,
         asset_type=PhotoPresentationAssetType.ORIGINAL,
         derived_image_id=None,
-        file_path=photo.file_path,
-        checksum_sha256=photo.checksum_sha256,
-        mime_type=photo.mime_type,
-        width=photo.width,
-        height=photo.height,
-        backing_asset_available=_asset_path(photo.file_path).is_file(),
+        file_path=str(asset.file_path) if asset else photo.file_path,
+        checksum_sha256=asset.checksum_sha256 if asset else photo.checksum_sha256,
+        mime_type=asset.mime_type if asset else photo.mime_type,
+        width=asset.width if asset else photo.width,
+        height=asset.height if asset else photo.height,
+        backing_asset_available=asset is not None,
         warnings=warnings or [],
     )
 

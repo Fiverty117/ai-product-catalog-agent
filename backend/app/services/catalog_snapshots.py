@@ -46,6 +46,7 @@ from app.domain.schemas import (
 from app.domain.sku_variants import normalize_variant_text
 from app.services.catalog_readiness import evaluate_product_catalog_readiness
 from app.services.photo_intake import PhotoIntakeError, inspect_supported_image
+from app.services.image_processing import inspect_original_image, resolve_photo_for_processing, PhotoStorageIntegrityError
 from app.services.product_copy_review import resolve_effective_product_copy
 
 CATALOG_SNAPSHOT_SCHEMA_VERSION = "catalog-snapshot-v1"
@@ -409,7 +410,23 @@ def _freeze_hero(
             raise CatalogSnapshotConsistencyError(
                 "original hero presentation unexpectedly references DerivedImage"
             )
-        presentation_asset = source_asset
+        try:
+            processing = resolve_photo_for_processing(photo)
+        except (OSError, PhotoIntakeError, PhotoStorageIntegrityError) as exc:
+            raise CatalogSnapshotAssetIntegrityError("source Photo processing representation is invalid") from exc
+        if processing.checksum_sha256 == source_asset.checksum_sha256:
+            presentation_asset = source_asset
+        else:
+            presentation_asset = _freeze_asset(
+                file_path=str(processing.file_path),
+                checksum_sha256=processing.checksum_sha256,
+                persisted_mime_type=processing.mime_type,
+                persisted_file_size=processing.file_size_bytes,
+                persisted_width=processing.width,
+                persisted_height=processing.height,
+                storage_root=storage_root,
+                expected_area="normalized",
+            )
     else:
         if derived_id is None:
             raise CatalogSnapshotConsistencyError(
@@ -501,7 +518,8 @@ def _freeze_asset(
             f"selected {expected_area} asset failed checksum verification"
         )
     try:
-        mime_type, extension, width, height = inspect_supported_image(content)
+        inspector = inspect_original_image if expected_area == "originals" else inspect_supported_image
+        mime_type, extension, width, height = inspector(content)
     except PhotoIntakeError:
         raise CatalogSnapshotAssetIntegrityError(
             f"selected {expected_area} asset is corrupt or unsupported"

@@ -44,3 +44,4 @@ backend/catalog.db-shm
 backend/catalog.db-wal
 
 storage/covers/
+storage/normalized/

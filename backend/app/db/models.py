@@ -393,7 +393,8 @@ class Photo(Base):
             name="ck_photos_original_filename_nonempty",
         ),
         CheckConstraint(
-            "mime_type IN ('image/jpeg', 'image/png', 'image/webp')",
+            "mime_type IN ('image/jpeg', 'image/png', 'image/webp') OR "
+            "(is_original = 1 AND mime_type = 'image/mpo')",
             name="ck_photos_supported_mime_type",
         ),
         CheckConstraint("file_size_bytes > 0", name="ck_photos_file_size_positive"),
