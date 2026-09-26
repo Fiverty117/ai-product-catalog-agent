@@ -274,7 +274,7 @@ def test_new_editorial_policy_does_not_change_old_proposal_or_review(
 
     new_job = enqueue_product_copy(session, product_id=product.id)
 
-    assert new_job.payload["prompt_version"] == "product-copy-v2"
+    assert new_job.payload["prompt_version"] == "product-copy-v3"
     assert (
         old_run.generated_text, old_run.status, old_run.started_at,
         old_run.completed_at, old_run.usage, old_run.input_snapshot,

@@ -31,6 +31,7 @@ from app.ai.product_copy import (
 )
 from app.ai.prompts.product_copy_v1 import PROMPT_VERSION as PROMPT_VERSION_V1
 from app.ai.prompts.product_copy_v2 import PROMPT_VERSION as PROMPT_VERSION_V2
+from app.ai.prompts.product_copy_v3 import PROMPT_VERSION as PROMPT_VERSION_V3
 from app.domain.schemas import ProductCopyResult
 
 
@@ -120,7 +121,7 @@ def _generation_facts(request: ProductCopyRequest) -> dict[str, Any]:
     if request.prompt_version == PROMPT_VERSION_V1:
         # Preserve the request semantics of jobs queued before the editorial fix.
         return request.input_snapshot.model_dump(mode="json", exclude_none=True)
-    if request.prompt_version != PROMPT_VERSION_V2:
+    if request.prompt_version not in {PROMPT_VERSION_V2, PROMPT_VERSION_V3}:
         raise PermanentProductCopyProviderError("unsupported Product copy prompt version")
     snapshot = request.input_snapshot
     return {

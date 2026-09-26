@@ -7,6 +7,8 @@ from app.ai.product_copy import (
     ProductCopyResponse,
     RetryableProductCopyProviderError,
 )
+from app.ai.prompts.product_copy_v2 import PRODUCT_COPY_PROMPT as PRODUCT_COPY_PROMPT_V2
+from app.ai.prompts.product_copy_v3 import PRODUCT_COPY_PROMPT as PRODUCT_COPY_PROMPT_V3
 from app.db import Base, Brand, Job, Product, ProductCopyRun
 from app.db.session import create_sqlite_engine
 from app.domain.enums import ExtractionRunStatus, JobStatus
@@ -38,7 +40,7 @@ def response(text="Descripcion factual para el producto de prueba."):
     )
 
 
-def setup_store(tmp_path):
+def setup_store(tmp_path, *, prompt_version=None):
     engine = create_sqlite_engine(f"sqlite:///{tmp_path / 'copy-handler.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -46,7 +48,10 @@ def setup_store(tmp_path):
         product = Product(name="Whey", brand=Brand(name="Brand"))
         session.add(product)
         session.flush()
-        job = enqueue_product_copy(session, product_id=product.id)
+        values = {"product_id": product.id}
+        if prompt_version is not None:
+            values["prompt_version"] = prompt_version
+        job = enqueue_product_copy(session, **values)
         session.commit()
         return engine, factory, product.id, job.id
 
@@ -69,12 +74,29 @@ def test_handler_completes_audited_run_without_product_mutation(tmp_path) -> Non
         assert run.product_id == product_id
         assert run.generated_text == "Descripcion factual para el producto de prueba."
         assert run.input_snapshot == job.payload["input_snapshot"]
-        assert run.prompt_version == "product-copy-v2"
+        assert run.prompt_version == "product-copy-v3"
         assert run.usage["provider_response_id"] == "resp_fake"
         assert product.name == "Whey"
     assert len(provider.requests) == 1
-    assert provider.requests[0].prompt_version == "product-copy-v2"
+    assert provider.requests[0].prompt_version == "product-copy-v3"
     assert "canonical PRODUCT" in provider.requests[0].prompt
+    engine.dispose()
+
+
+def test_handler_preserves_v2_prompt_for_already_queued_job(tmp_path) -> None:
+    engine, factory, _, _ = setup_store(
+        tmp_path, prompt_version="product-copy-v2"
+    )
+    provider = FakeProvider(response())
+
+    JobWorker(
+        factory,
+        {PRODUCT_COPY_JOB_TYPE: ProductCopyJobHandler(factory, provider)},
+    ).run_once()
+
+    assert provider.requests[0].prompt_version == "product-copy-v2"
+    assert provider.requests[0].prompt == PRODUCT_COPY_PROMPT_V2
+    assert provider.requests[0].prompt != PRODUCT_COPY_PROMPT_V3
     engine.dispose()
 
 
