@@ -74,6 +74,7 @@ def make_context(session: Session):
         SKU(
             id=uuid.UUID(int=20),
             product=product,
+            external_sku="CHOC-204-25",
             flavor="Chocolate",
             size_value=Decimal("2"),
             size_unit="LB",
@@ -178,7 +179,8 @@ def test_source_snapshot_and_fingerprint_use_only_ordered_canonical_facts(
     assert all(
         forbidden not in flattened
         for forbidden in (
-            "price", "amount", "currency", "branding", "layout", "photo", "image"
+            "price", "amount", "currency", "external_sku", "choc-204-25",
+            "branding", "layout", "photo", "image"
         )
     )
     assert build_product_copy_source_fingerprint(first) == (
@@ -241,6 +243,53 @@ def test_enqueue_is_idempotent_but_configuration_and_facts_change_identity(
     product.name = "Changed canonical Product"
     changed_facts = enqueue_product_copy(session, product_id=product.id)
     assert len({first.id, changed_model.id, changed_facts.id}) == 3
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [None, ProductCopyReviewDecision.APPROVED, ProductCopyReviewDecision.CORRECTED,
+     ProductCopyReviewDecision.REJECTED],
+)
+def test_new_editorial_policy_does_not_change_old_proposal_or_review(
+    session: Session, decision: ProductCopyReviewDecision | None,
+) -> None:
+    product, *_ = make_context(session)
+    old_run = succeeded_run(session, product, "Resumen antiguo de SKU.")
+    old_review = None
+    if decision is not None:
+        corrected = (
+            "Corrección humana."
+            if decision is ProductCopyReviewDecision.CORRECTED else None
+        )
+        old_review = review(session, old_run, decision, corrected)
+    session.flush()
+    before = (
+        old_run.generated_text, old_run.status, old_run.started_at,
+        old_run.completed_at, old_run.usage.copy(), old_run.input_snapshot.copy(),
+        old_run.prompt_version,
+        old_review.decision if old_review else None,
+        old_review.applied_at if old_review else None,
+        old_review.corrected_short_description if old_review else None,
+    )
+
+    new_job = enqueue_product_copy(session, product_id=product.id)
+
+    assert new_job.payload["prompt_version"] == "product-copy-v2"
+    assert (
+        old_run.generated_text, old_run.status, old_run.started_at,
+        old_run.completed_at, old_run.usage, old_run.input_snapshot,
+        old_run.prompt_version,
+        old_review.decision if old_review else None,
+        old_review.applied_at if old_review else None,
+        old_review.corrected_short_description if old_review else None,
+    ) == before
+    resolved = resolve_effective_product_copy(session, product.id)
+    if decision is ProductCopyReviewDecision.CORRECTED:
+        assert resolved.short_description == "Corrección humana."
+    elif decision is ProductCopyReviewDecision.APPROVED:
+        assert resolved.short_description == "Resumen antiguo de SKU."
+    else:
+        assert resolved.state is ProductCopyResolutionState.NONE
 
 
 def test_run_lifecycle_is_audited_terminal_and_does_not_modify_product(

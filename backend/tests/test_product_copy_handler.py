@@ -69,9 +69,12 @@ def test_handler_completes_audited_run_without_product_mutation(tmp_path) -> Non
         assert run.product_id == product_id
         assert run.generated_text == "Descripcion factual para el producto de prueba."
         assert run.input_snapshot == job.payload["input_snapshot"]
+        assert run.prompt_version == "product-copy-v2"
         assert run.usage["provider_response_id"] == "resp_fake"
         assert product.name == "Whey"
     assert len(provider.requests) == 1
+    assert provider.requests[0].prompt_version == "product-copy-v2"
+    assert "canonical PRODUCT" in provider.requests[0].prompt
     engine.dispose()
 
 

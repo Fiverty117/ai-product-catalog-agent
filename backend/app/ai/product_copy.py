@@ -60,6 +60,7 @@ def normalize_product_copy_parameters(
 class ProductCopyRequest:
     model: str
     prompt: str
+    prompt_version: str
     input_snapshot: ProductCopyInputSnapshot
     parameters: Mapping[str, object]
 

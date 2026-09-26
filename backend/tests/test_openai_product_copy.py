@@ -11,7 +11,8 @@ from app.ai.product_copy import (
     RetryableProductCopyProviderError,
     configured_openai_product_copy_model,
 )
-from app.ai.prompts.product_copy_v1 import PRODUCT_COPY_PROMPT, PROMPT_VERSION
+from app.ai.prompts.product_copy_v1 import PRODUCT_COPY_PROMPT as PRODUCT_COPY_PROMPT_V1
+from app.ai.prompts.product_copy_v2 import PRODUCT_COPY_PROMPT, PROMPT_VERSION
 from app.domain.schemas import ProductCopyInputSnapshot, ProductCopyResult
 
 
@@ -33,30 +34,33 @@ def client(response=None, error=None):
     return SimpleNamespace(responses=responses), responses
 
 
-def request(**parameters):
+def request(*, flavors=("Chocolate",), prompt_version=PROMPT_VERSION, **parameters):
     snapshot = ProductCopyInputSnapshot.model_validate(
         {
             "product_id": "1" * 32,
             "brand_name": "LANDERFIT",
-            "product_name": "Premium Whey",
+            "product_name": "VEGAN PROTEIN",
             "primary_category": {
                 "category_id": "2" * 32,
-                "name": "Proteinas",
+                "name": "Proteínas",
             },
             "secondary_categories": [],
             "variants": [
                 {
-                    "sku_id": "3" * 32,
-                    "flavor": "Vanilla",
-                    "size_value": "2",
+                    "sku_id": f"{index + 3:032x}",
+                    "flavor": flavor,
+                    "size_value": "2.04",
                     "size_unit": "LB",
+                    "servings": 25,
                 }
+                for index, flavor in enumerate(flavors)
             ],
         }
     )
     return ProductCopyRequest(
         model="gpt-5.6-sol",
-        prompt=PRODUCT_COPY_PROMPT,
+        prompt=PRODUCT_COPY_PROMPT if prompt_version == PROMPT_VERSION else PRODUCT_COPY_PROMPT_V1,
+        prompt_version=prompt_version,
         input_snapshot=snapshot,
         parameters={"reasoning_effort": "low", **parameters},
     )
@@ -67,7 +71,7 @@ def test_prompt_and_openai_request_are_grounded_structured_and_private() -> None
         id="resp_copy",
         status="completed",
         output_parsed={
-            "short_description": "  Premium Whey LANDERFIT sabor Vanilla de 2 LB. "
+            "short_description": "  Descripción breve del producto. "
         },
         output=[],
         usage=SimpleNamespace(
@@ -83,17 +87,24 @@ def test_prompt_and_openai_request_are_grounded_structured_and_private() -> None
     returned = OpenAIProductCopyProvider(fake_client).generate(request())
 
     call = responses.calls[0]
-    assert PROMPT_VERSION == "product-copy-v1"
+    assert PROMPT_VERSION == "product-copy-v2"
     prompt = PRODUCT_COPY_PROMPT.casefold()
     for required in (
-        "use only supplied facts",
+        "canonical product",
+        "evergreen",
         "medical",
-        "nutritional quantities",
+        "strength",
+        "performance",
+        "recovery",
+        "muscle gain",
         "ingredients",
         "certifications",
         "origin",
         "instructions",
-        "do not mention prices",
+        "price",
+        "flavor",
+        "servings",
+        "external sku",
     ):
         assert required in prompt
     assert call["model"] == "gpt-5.6-sol"
@@ -102,12 +113,16 @@ def test_prompt_and_openai_request_are_grounded_structured_and_private() -> None
     assert call["store"] is False
     assert "tools" not in call
     serialized_input = str(call["input"]).casefold()
-    assert "vanilla" in serialized_input
+    assert "vegan protein" in serialized_input
+    assert "landerfit" in serialized_input
+    assert "proteínas" in serialized_input
+    assert "chocolate" not in serialized_input
+    assert "2.04" not in serialized_input
+    assert "25" not in serialized_input
+    assert "sku_id" not in serialized_input
     assert "price" not in serialized_input
     assert "image" not in serialized_input
-    assert returned.structured_result.short_description == (
-        "Premium Whey LANDERFIT sabor Vanilla de 2 LB."
-    )
+    assert returned.structured_result.short_description == "Descripción breve del producto."
     assert returned.usage == {
         "provider_response_id": "resp_copy",
         "input_tokens": 30,
@@ -116,6 +131,26 @@ def test_prompt_and_openai_request_are_grounded_structured_and_private() -> None
         "cached_input_tokens": 4,
         "reasoning_tokens": 3,
     }
+
+
+def test_multiple_skus_do_not_enter_product_level_generation_context() -> None:
+    fake_client, responses = client(
+        SimpleNamespace(status="completed", output=[], output_parsed={"short_description": "Descripción general."})
+    )
+    OpenAIProductCopyProvider(fake_client).generate(
+        request(flavors=("Chocolate", "Vanilla", "Strawberry"))
+    )
+    serialized_input = str(responses.calls[0]["input"]).casefold()
+    assert all(flavor not in serialized_input for flavor in ("chocolate", "vanilla", "strawberry"))
+    assert "vegan protein" in serialized_input
+
+
+def test_v1_queued_request_keeps_its_original_context() -> None:
+    fake_client, responses = client(
+        SimpleNamespace(status="completed", output=[], output_parsed={"short_description": "Descripción anterior."})
+    )
+    OpenAIProductCopyProvider(fake_client).generate(request(prompt_version="product-copy-v1"))
+    assert "chocolate" in str(responses.calls[0]["input"]).casefold()
 
 
 @pytest.mark.parametrize(

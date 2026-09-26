@@ -13,7 +13,7 @@ from app.ai.product_copy import (
     configured_openai_product_copy_model,
     normalize_product_copy_parameters,
 )
-from app.ai.prompts.product_copy_v1 import PROMPT_VERSION
+from app.ai.prompts.product_copy_v2 import PROMPT_VERSION
 from app.db.models import Category, Job, Product, ProductCategory, ProductCopyRun, SKU
 from app.db.types import utc_now
 from app.domain.enums import ExtractionRunStatus, ProductCopyType

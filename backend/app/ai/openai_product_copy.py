@@ -29,6 +29,8 @@ from app.ai.product_copy import (
     RetryableProductCopyProviderError,
     normalize_product_copy_parameters,
 )
+from app.ai.prompts.product_copy_v1 import PROMPT_VERSION as PROMPT_VERSION_V1
+from app.ai.prompts.product_copy_v2 import PROMPT_VERSION as PROMPT_VERSION_V2
 from app.domain.schemas import ProductCopyResult
 
 
@@ -51,8 +53,8 @@ class OpenAIProductCopyProvider:
 
     def generate(self, request: ProductCopyRequest) -> ProductCopyResponse:
         parameters = normalize_product_copy_parameters(request.parameters)
-        snapshot_json = json.dumps(
-            request.input_snapshot.model_dump(mode="json", exclude_none=True),
+        facts_json = json.dumps(
+            _generation_facts(request),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -67,7 +69,7 @@ class OpenAIProductCopyProvider:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "Canonical Product facts:\n" + snapshot_json,
+                            "text": "Canonical Product facts:\n" + facts_json,
                         }
                     ],
                 }
@@ -112,6 +114,23 @@ class OpenAIProductCopyProvider:
             structured_result=parsed,
             usage=_normalize_usage(response),
         )
+
+
+def _generation_facts(request: ProductCopyRequest) -> dict[str, Any]:
+    if request.prompt_version == PROMPT_VERSION_V1:
+        # Preserve the request semantics of jobs queued before the editorial fix.
+        return request.input_snapshot.model_dump(mode="json", exclude_none=True)
+    if request.prompt_version != PROMPT_VERSION_V2:
+        raise PermanentProductCopyProviderError("unsupported Product copy prompt version")
+    snapshot = request.input_snapshot
+    return {
+        "brand_name": snapshot.brand_name,
+        "product_name": snapshot.product_name,
+        "primary_category": (
+            snapshot.primary_category.name if snapshot.primary_category else None
+        ),
+        "secondary_categories": [category.name for category in snapshot.secondary_categories],
+    }
 
 
 def _classify_openai_error(error: Exception) -> Exception:

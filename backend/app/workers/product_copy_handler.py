@@ -10,7 +10,14 @@ from app.ai.product_copy import (
     ProductCopyRequest,
     RetryableProductCopyProviderError,
 )
-from app.ai.prompts.product_copy_v1 import PRODUCT_COPY_PROMPT, PROMPT_VERSION
+from app.ai.prompts.product_copy_v1 import (
+    PRODUCT_COPY_PROMPT as PRODUCT_COPY_PROMPT_V1,
+    PROMPT_VERSION as PROMPT_VERSION_V1,
+)
+from app.ai.prompts.product_copy_v2 import (
+    PRODUCT_COPY_PROMPT as PRODUCT_COPY_PROMPT_V2,
+    PROMPT_VERSION as PROMPT_VERSION_V2,
+)
 from app.db.models import ProductCopyRun
 from app.domain.schemas import ProductCopyJobPayload, ProductCopyResult
 from app.services.jobs import PermanentJobError
@@ -25,6 +32,10 @@ from app.services.product_copy import (
 from app.workers.job_worker import ClaimedJob
 
 SessionFactory = Callable[[], Session]
+PRODUCT_COPY_PROMPTS = {
+    PROMPT_VERSION_V1: PRODUCT_COPY_PROMPT_V1,
+    PROMPT_VERSION_V2: PRODUCT_COPY_PROMPT_V2,
+}
 
 
 class InvalidProductCopyHandlerJob(PermanentJobError):
@@ -45,7 +56,8 @@ class ProductCopyJobHandler:
         run_id = self._prepare_attempt(claimed, payload)
         request = ProductCopyRequest(
             model=payload.model,
-            prompt=PRODUCT_COPY_PROMPT,
+            prompt=PRODUCT_COPY_PROMPTS[payload.prompt_version],
+            prompt_version=payload.prompt_version,
             input_snapshot=payload.input_snapshot,
             parameters=payload.parameters,
         )
@@ -90,7 +102,7 @@ class ProductCopyJobHandler:
             raise InvalidProductCopyHandlerJob(
                 "job provider does not match configured Product copy provider"
             )
-        if payload.prompt_version != PROMPT_VERSION:
+        if payload.prompt_version not in PRODUCT_COPY_PROMPTS:
             raise InvalidProductCopyHandlerJob(
                 f"unsupported Product copy prompt version: {payload.prompt_version}"
             )
