@@ -10,12 +10,12 @@ try {
     $services = @($state.services)
     [array]::Reverse($services)
     foreach ($service in $services) {
-        if (Test-OwnedService $service) {
+        if (Test-ServiceMayBeAlive $service) {
             Stop-OwnedService $service
             Write-Host "Stopped $($service.name) (PID $($service.pid))."
         } else { Write-Host "Skipped stale $($service.name) record; no unknown process stopped." }
     }
-    $remaining = @($state.services | Where-Object { Test-OwnedService $_ })
+    $remaining = @($state.services | Where-Object { Test-ServiceMayBeAlive $_ })
     if ($remaining.Count -gt 0) { throw 'Some launcher-owned services remain alive. Runtime state retained; retry stop.ps1.' }
     Remove-LauncherState
     Write-Host 'AI Product Catalog Agent stopped.'

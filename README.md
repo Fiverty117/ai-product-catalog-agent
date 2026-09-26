@@ -45,6 +45,22 @@ For troubleshooting, use `doctor.ps1`, inspect the run-scoped logs, stop any
 partial launcher-owned runtime with `stop.ps1`, and retry. The individual
 commands below remain available for debugging, not ordinary daily operation.
 
+Process ownership is anchored to the launched PID, exact creation time,
+requested executable and command marker. Windows can briefly omit `Process.Path`
+at launch; workers retry incomplete metadata within their two-second startup
+window (no fixed startup delay). A missing PID fails immediately; a proven
+identity mismatch is never accepted. The venv Python parent stays tracked;
+shutdown verifies and stops its descendants, without searching for other Python
+workers. If metadata cannot be verified, status shows `Unverified` and the state
+is retained for a later safe stop, including failed-start rollback.
+
+Focused launcher checks (PowerShell 5.1 or 7, no app/database/provider calls):
+`powershell.exe -NoProfile -File scripts/dev/tests/launcher-tests.ps1`.
+An optional isolated venv diagnostic is
+`powershell.exe -NoProfile -File scripts/dev/tests/inspect-worker-startup.ps1`;
+it only launches short-lived Python wait processes, prints ownership predicates
+and child metadata, and stops its verified test trees.
+
 ## Catalog History
 
 Open `/catalogs` from the application navigation to browse Catalog Builds,

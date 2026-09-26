@@ -8,9 +8,16 @@ try {
     Write-Host 'AI Product Catalog Agent — status'
     Write-Host ('{0,-24} {1,-12} {2,-8} {3}' -f 'Service','Status','PID','Port')
     $running = 0
+    $unverified = 0
     foreach ($service in @($state.services)) {
-        $owned = Test-OwnedService $service
+        $identity = Get-ProcessOwnership $service
+        $owned = $identity.status -eq 'owned'
+        if (-not $owned -and $service.kind -eq 'http') { $owned = Test-OwnedService $service }
         $status = 'Stale'
+        if (-not $owned -and $identity.status -eq 'unverified') {
+            $status = 'Unverified'
+            $unverified += 1
+        }
         if ($owned) {
             $healthy = $true
             if ($service.kind -eq 'http') {
@@ -24,7 +31,8 @@ try {
         Write-Host ('{0,-24} {1,-12} {2,-8} {3}' -f $service.name,$status,$service.pid,$portText)
     }
     foreach ($name in @($state.skipped)) { Write-Host ('{0,-24} {1}' -f $name,'Skipped — OPENAI_API_KEY missing') }
-    if ($running -eq 0) { Write-Host 'Application not running. Stale runtime metadata detected; start.ps1 can clear it safely.' }
+    if ($unverified -gt 0) { Write-Host 'Some process identities cannot be verified. Runtime state retained; retry status.ps1/stop.ps1.' }
+    if ($running -eq 0 -and $unverified -eq 0) { Write-Host 'Application not running. Stale runtime metadata detected; start.ps1 can clear it safely.' }
     else {
         Write-Host "OpenAI key at launch: $(if ($state.openai_configured) { 'present (not validated)' } else { 'not configured' })"
         Write-Host "Database: $($state.database_path)"

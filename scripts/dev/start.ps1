@@ -9,6 +9,8 @@ try {
     $lock = Enter-LauncherLock
     $prior = Read-LauncherState
     if ($null -ne $prior) {
+        $unverified = @($prior.services | Where-Object { (Get-ProcessOwnership $_).status -eq 'unverified' })
+        if ($unverified.Count -gt 0) { throw 'Existing runtime identity cannot be verified. State retained; retry status.ps1/stop.ps1. No duplicate processes started.' }
         $owned = @($prior.services | Where-Object { Test-OwnedService $_ })
         if ($owned.Count -gt 0) {
             if ($owned.Count -eq @($prior.services).Count -and $prior.backend_port -eq $BackendPort -and $prior.frontend_port -eq $FrontendPort) {
@@ -44,7 +46,7 @@ try {
         $started += $record
         Write-Host "Starting $($service.name) (PID $($record.pid))..."
         if ($service.kind -eq 'http') { Wait-ServiceReady $record 25 }
-        else { Start-Sleep -Milliseconds 800; Wait-ServiceReady $record 2 }
+        else { Wait-ServiceReady $record 2 }
         Write-Host "OK  $($service.name)"
     }
     $skipped = @()
@@ -68,7 +70,7 @@ try {
     Write-Host "ERROR  $($_.Exception.Message)"
     [array]::Reverse($started)
     foreach ($record in $started) { try { Stop-OwnedService $record } catch { Write-Host "WARN  Could not stop $($record.name); inspect PID $($record.pid)." } }
-    $remaining = @($started | Where-Object { Test-OwnedService $_ })
+    $remaining = @($started | Where-Object { Test-ServiceMayBeAlive $_ })
     if ($remaining.Count -gt 0) {
         [pscustomobject]@{
             run_id='partial-start'; started_at_utc=(Get-Date).ToUniversalTime().ToString('o')
@@ -76,7 +78,7 @@ try {
             openai_configured=$false; services=$remaining; skipped=@()
         } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $script:StatePath -Encoding UTF8
         Write-Host 'WARN  Partial owned state retained for stop.ps1.'
-    } else { Remove-LauncherState }
+    } elseif ($started.Count -gt 0) { Remove-LauncherState }
     exit 1
 } finally { if ($null -ne $lock) { $lock.Dispose() } }
 exit 0

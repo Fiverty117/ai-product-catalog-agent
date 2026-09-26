@@ -126,16 +126,59 @@ function Remove-LauncherState {
     }
 }
 
-function Get-OwnedProcess($Record) {
+function ConvertTo-ProcessStartUtc($Value) {
+    # PowerShell 7 may deserialize an ISO JSON string as DateTime; retain its ticks.
+    if ($Value -is [datetime]) { return $Value.ToUniversalTime() }
+    return [datetime]::Parse([string]$Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+}
+
+function Get-ProcessOwnership($Record) {
+    $state = [pscustomobject]@{ status='unverified'; reason='Process metadata unavailable'; process=$null }
+    try { $process = Get-Process -Id ([int]$Record.pid) -ErrorAction Stop }
+    catch {
+        if ($_.FullyQualifiedErrorId -like 'NoProcessFoundForGivenId*') {
+            $state.status = 'dead'; $state.reason = 'Launch PID no longer exists'
+        }
+        return $state
+    }
     try {
-        $process = Get-Process -Id ([int]$Record.pid) -ErrorAction Stop
-        $started = $process.StartTime.ToUniversalTime().ToString('o')
-        if ($started -ne [string]$Record.start_time_utc) { return $null }
-        if (-not [string]::Equals([string]$process.Path, [string]$Record.executable, [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
-        $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($Record.pid)" -ErrorAction SilentlyContinue
-        if ($null -ne $cim -and -not [string]::IsNullOrWhiteSpace([string]$cim.CommandLine) -and [string]$cim.CommandLine -notlike "*$($Record.marker)*") { return $null }
-        return $process
-    } catch { return $null }
+        if ($process.StartTime.ToUniversalTime() -ne (ConvertTo-ProcessStartUtc $Record.start_time_utc)) {
+            $state.status = 'mismatch'; $state.reason = 'StartTime differs (possible PID reuse)'; return $state
+        }
+        $path = [string]$process.Path
+        if ([string]::IsNullOrWhiteSpace($path)) { $state.reason = 'Process.Path unavailable'; return $state }
+        if (-not [string]::Equals($path, [string]$Record.executable, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $state.status = 'mismatch'; $state.reason = 'Executable path differs'; return $state
+        }
+        $state.reason = 'Win32_Process/CommandLine unavailable'
+        $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($Record.pid)" -ErrorAction Stop
+        if ($null -eq $cim -or [string]::IsNullOrWhiteSpace([string]$cim.CommandLine)) { return $state }
+        if ([string]$cim.CommandLine -notlike "*$($Record.marker)*") {
+            $state.status = 'mismatch'; $state.reason = 'Command marker differs'; return $state
+        }
+        $state.status = 'owned'; $state.reason = 'Identity verified'; $state.process = $process
+    } catch { }
+    return $state
+}
+
+function Get-OwnedProcess($Record, [int]$VerificationSeconds = 0) {
+    $deadline = (Get-Date).AddSeconds($VerificationSeconds)
+    do {
+        $identity = Get-ProcessOwnership $Record
+        if ($identity.status -eq 'owned') { return $identity.process }
+        if ($identity.status -ne 'unverified' -or $VerificationSeconds -eq 0) { return $null }
+        if ((Get-Date) -ge $deadline) { throw "Cannot verify $($Record.name) (PID $($Record.pid)): $($identity.reason). Runtime state must be retained." }
+        Start-Sleep -Milliseconds 400
+    } while ($true)
+}
+
+function Test-ServiceMayBeAlive($Record) {
+    if (Test-OwnedService $Record) { return $true }
+    return (Get-ProcessOwnership $Record).status -in @('owned','unverified')
+}
+
+function Get-ProcessParents {
+    return [LocalCatalogProcessTree]::Parents()
 }
 
 function Test-OwnedService($Record) {
@@ -145,7 +188,7 @@ function Test-OwnedService($Record) {
         foreach ($child in @($Record.lineage)) {
             try {
                 $fresh = Get-Process -Id ([int]$child.pid) -ErrorAction Stop
-                if ($fresh.StartTime.ToUniversalTime().ToString('o') -eq [string]$child.start_time_utc -and
+                if ($fresh.StartTime.ToUniversalTime() -eq (ConvertTo-ProcessStartUtc $child.start_time_utc) -and
                     [string]::Equals([string]$fresh.Path, [string]$child.executable, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
             } catch { }
         }
@@ -167,14 +210,14 @@ function Get-OwnedDescendants($Map, [int]$ParentId, [datetime]$ParentStart) {
 }
 
 function Stop-OwnedService($Record) {
-    $process = Get-OwnedProcess $Record
+    $process = Get-OwnedProcess $Record 2
     if ($null -eq $process -and $Record.kind -eq 'http') {
         $null = Try-AdoptHttpChild $Record
         $process = Get-OwnedProcess $Record
     }
     $children = @()
     if ($null -ne $process) {
-        $parents = [LocalCatalogProcessTree]::Parents()
+        $parents = Get-ProcessParents
         $children = @(Get-OwnedDescendants $parents $process.Id $process.StartTime)
         if ($null -ne (Get-OwnedProcess $Record)) { Stop-Process -Id ([int]$Record.pid) -Force -ErrorAction Stop }
     }
@@ -182,7 +225,7 @@ function Stop-OwnedService($Record) {
     foreach ($child in $children) {
         try {
             $fresh = Get-Process -Id ([int]$child.pid) -ErrorAction Stop
-            if ($fresh.StartTime.ToUniversalTime().ToString('o') -eq $child.start_time_utc -and [string]::Equals([string]$fresh.Path, [string]$child.executable, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($fresh.StartTime.ToUniversalTime() -eq (ConvertTo-ProcessStartUtc $child.start_time_utc) -and [string]::Equals([string]$fresh.Path, [string]$child.executable, [System.StringComparison]::OrdinalIgnoreCase)) {
                 Stop-Process -Id ([int]$child.pid) -Force -ErrorAction Stop
             }
         } catch {
@@ -191,11 +234,17 @@ function Stop-OwnedService($Record) {
     }
 }
 
-function Test-HttpReady([string]$Url) {
+function Get-HttpReadiness([string]$Url) {
     try {
         $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-        return ($response.StatusCode -eq 200)
-    } catch { return $false }
+        return [pscustomobject]@{ ready=($response.StatusCode -eq 200); reason="HTTP $($response.StatusCode)" }
+    } catch {
+        return [pscustomobject]@{ ready=$false; reason="$($_.Exception.GetType().Name): $($_.Exception.Message)" }
+    }
+}
+
+function Test-HttpReady([string]$Url) {
+    return (Get-HttpReadiness $Url).ready
 }
 
 function Test-ProcessDescendsFrom($Map, [int]$ProcessId, [int]$AncestorId) {
@@ -209,7 +258,7 @@ function Test-ProcessDescendsFrom($Map, [int]$ProcessId, [int]$AncestorId) {
 }
 
 function Test-ListenerRelated($Record, [int]$ListenerId) {
-    $parents = [LocalCatalogProcessTree]::Parents()
+    $parents = Get-ProcessParents
     $ancestors = @([int]$Record.pid)
     if ($Record.PSObject.Properties.Name -contains 'lineage') { $ancestors += @($Record.lineage | ForEach-Object { [int]$_.pid }) }
     foreach ($ancestor in $ancestors) {
@@ -224,7 +273,7 @@ function Try-AdoptHttpChild($Record) {
     if (-not (Test-ListenerRelated $Record $listener.pid)) { return $false }
     try {
         $child = Get-Process -Id $listener.pid -ErrorAction Stop
-        if ($child.StartTime.ToUniversalTime() -lt [datetime]::Parse($Record.start_time_utc).ToUniversalTime()) { return $false }
+        if ($child.StartTime.ToUniversalTime() -lt (ConvertTo-ProcessStartUtc $Record.start_time_utc)) { return $false }
         $Record.pid = $child.Id
         $Record.start_time_utc = $child.StartTime.ToUniversalTime().ToString('o')
         $Record.executable = $child.Path
@@ -235,29 +284,46 @@ function Try-AdoptHttpChild($Record) {
 
 function Wait-ServiceReady($Record, [int]$Seconds) {
     $deadline = (Get-Date).AddSeconds($Seconds)
+    $httpDiagnostic = 'No HTTP check completed'
     while ((Get-Date) -lt $deadline) {
         if ($Record.kind -eq 'worker') {
-            if ($null -eq (Get-OwnedProcess $Record)) { throw "$($Record.name) exited during startup. See $($Record.error_log)." }
-            return
+            $identity = Get-ProcessOwnership $Record
+            if ($identity.status -eq 'owned') { return }
+            if ($identity.status -eq 'dead') { throw "$($Record.name) exited during startup (PID $($Record.pid)). See $($Record.error_log)." }
+            if ($identity.status -eq 'mismatch') { throw "$($Record.name) ownership mismatch (PID $($Record.pid)): $($identity.reason). No unrelated process accepted. See $($Record.error_log)." }
+            Start-Sleep -Milliseconds 400
+            continue
         }
-        $root = Get-OwnedProcess $Record
+        $rootIdentity = Get-ProcessOwnership $Record
+        $root = $rootIdentity.process
         if ($null -ne $root -and $Record.PSObject.Properties.Name -contains 'lineage') {
-            $parents = [LocalCatalogProcessTree]::Parents()
+            $parents = Get-ProcessParents
             foreach ($child in @(Get-OwnedDescendants $parents $root.Id $root.StartTime)) {
                 if ($null -ne $child -and $child.pid -notin @($Record.lineage | ForEach-Object { $_.pid })) {
                     $Record.lineage += $child
                 }
             }
         }
-        if (Test-HttpReady $Record.url) {
+        $http = Get-HttpReadiness $Record.url
+        $httpDiagnostic = "health=$($http.reason); root=$($rootIdentity.status) ($($rootIdentity.reason)); listener=not checked; related=not checked; lineage=$(@($Record.lineage).Count)"
+        if ($http.ready) {
             $listener = Get-PortOccupant ([int]$Record.port)
-            if ($null -ne $listener -and (Test-ListenerRelated $Record $listener.pid)) {
-                if ($null -ne $root -or (Try-AdoptHttpChild $Record)) { return }
+            $related = $false
+            if ($null -ne $listener) { $related = Test-ListenerRelated $Record $listener.pid }
+            $listenerText = if ($null -eq $listener) { 'none' } else { [string]$listener.pid }
+            $httpDiagnostic = "health=$($http.reason); root=$($rootIdentity.status) ($($rootIdentity.reason)); listener=$listenerText; related=$related; lineage=$(@($Record.lineage).Count)"
+            if ($null -ne $listener -and $related) {
+                if ($null -ne $root) { return }
+                if (Try-AdoptHttpChild $Record) { return }
+                $httpDiagnostic += '; adoption=False'
             }
         }
         Start-Sleep -Milliseconds 400
     }
-    throw "$($Record.name) did not become ready in $Seconds seconds (launch PID $($Record.pid)). See $($Record.error_log)."
+    if ($Record.kind -eq 'worker') {
+        throw "$($Record.name) ownership could not be verified in $Seconds seconds (launch PID $($Record.pid)): $($identity.reason). See $($Record.error_log)."
+    }
+    throw "$($Record.name) did not become ready in $Seconds seconds (launch PID $($Record.pid)). $httpDiagnostic. See $($Record.error_log)."
 }
 
 function Start-ManifestService($Service, [string]$RunLogDirectory) {
@@ -269,7 +335,9 @@ function Start-ManifestService($Service, [string]$RunLogDirectory) {
     return [pscustomobject]@{
         id=$Service.id; name=$Service.name; kind=$Service.kind; pid=$process.Id
         start_time_utc=$process.StartTime.ToUniversalTime().ToString('o')
-        executable=$process.Path; marker=$Service.marker; port=$Service.port; url=$Service.url
+        # Process.Path can be null immediately after Start-Process on Windows.
+        # Anchor ownership to the requested executable, then verify the live path.
+        executable=[System.IO.Path]::GetFullPath([string]$Service.executable); marker=$Service.marker; port=$Service.port; url=$Service.url
         output_log=$out; error_log=$err; working_directory=$Service.directory; lineage=@()
     }
 }
