@@ -494,7 +494,10 @@ class FrozenCatalogAsset(StrictSchema):
             or parts[0] not in {"originals", "processed", "normalized"}
             or self.mime_type not in expected_extensions
             or (self.mime_type == "image/mpo" and parts[0] != "originals")
-            or (parts[0] == "normalized" and self.mime_type != "image/jpeg")
+            or (
+                parts[0] == "normalized"
+                and self.mime_type not in {"image/jpeg", "image/png", "image/webp"}
+            )
             or parts[1] != self.checksum_sha256[:2].lower()
             or parts[2]
             != self.checksum_sha256.lower()
@@ -589,19 +592,24 @@ class CatalogHeroSnapshot(StrictSchema):
         if (
             self.presentation_type is PhotoPresentationAssetType.ORIGINAL
             and self.presentation_asset != self.source_original_asset
-            and self.source_original_asset.mime_type != "image/mpo"
+            and not self.presentation_asset.storage_relative_path.startswith(
+                "normalized/"
+            )
         ):
-            raise ValueError("original presentation asset must equal source asset")
+            raise ValueError(
+                "normalized original presentation must use normalized storage"
+            )
         if not self.source_original_asset.storage_relative_path.startswith(
             "originals/"
         ):
             raise ValueError("source original asset must use originals storage")
-        expected_area = (
-            "processed/"
-            if self.presentation_type is PhotoPresentationAssetType.DERIVED
-            else "normalized/" if self.source_original_asset.mime_type == "image/mpo"
-            else "originals/"
-        )
+        expected_area = "processed/"
+        if self.presentation_type is PhotoPresentationAssetType.ORIGINAL:
+            expected_area = (
+                "originals/"
+                if self.presentation_asset == self.source_original_asset
+                else "normalized/"
+            )
         if not self.presentation_asset.storage_relative_path.startswith(expected_area):
             raise ValueError("presentation asset uses the wrong storage area")
         if self.presentation_asset.mime_type not in {"image/jpeg", "image/png", "image/webp"}:

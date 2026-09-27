@@ -19,7 +19,12 @@ from app.domain.schemas import ProductExtractionJobPayload, ProductExtractionRes
 from app.services.extraction import PRODUCT_EXTRACTION_JOB_TYPE, PRODUCT_EXTRACTION_SCHEMA_VERSION
 from app.services.jobs import enqueue_job
 from app.services.photo_intake import register_original_photo
-from app.services.image_processing import resolve_photo_for_processing, PhotoIntakeError, PhotoStorageIntegrityError
+from app.services.image_processing import (
+    PROCESSING_VERSION,
+    PhotoIntakeError,
+    PhotoStorageIntegrityError,
+    resolve_photo_for_processing,
+)
 
 
 class UnknownIntakeError(ValueError):
@@ -198,7 +203,10 @@ def intake_read(session: Session, item: ProductIntakeItem) -> ProductIntakeRead:
             id=link.photo_id, position=link.position, is_primary=link.is_primary,
             original_filename=link.photo.original_filename or "Photo",
             mime_type=link.photo.mime_type or "application/octet-stream",
-            image_url=f"/api/product-intake/items/{item.id}/photos/{link.photo_id}/image",
+            image_url=(
+                f"/api/product-intake/items/{item.id}/photos/{link.photo_id}/image"
+                f"?v={PROCESSING_VERSION}"
+            ),
         ) for link in links],
         extraction=IntakeExtractionRead(
             job_id=job.id if job else None, job_status=job.status.value if job else None,

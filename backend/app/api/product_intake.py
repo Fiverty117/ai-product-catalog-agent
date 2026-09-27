@@ -158,7 +158,11 @@ def photo_image(intake_id: uuid.UUID, photo_id: uuid.UUID, session: DB, original
     try:
         item = require_intake(session, intake_id)
         path, mime = resolve_intake_photo(session, item, photo_id, originals_dir)
-        return FileResponse(path, media_type=mime)
+        return FileResponse(
+            path,
+            media_type=mime,
+            headers={"Cache-Control": "no-cache"},
+        )
     except (UnknownIntakeError, IntakeConflictError, IntakeAssetError) as exc:
         raise _error(session, exc) from exc
 

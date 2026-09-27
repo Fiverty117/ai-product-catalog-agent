@@ -26,7 +26,10 @@ from app.services.jobs import enqueue_job
 from app.services.photo_intake import (
     DEFAULT_ORIGINALS_DIR,
     PhotoIntakeError,
+)
+from app.services.image_processing import (
     inspect_supported_image,
+    normalize_image_for_processing,
 )
 
 IMAGE_ENHANCEMENT_JOB_TYPE = "image.enhance.v1"
@@ -232,12 +235,16 @@ def store_processed_image(
     processed_dir: Path = DEFAULT_PROCESSED_DIR,
 ) -> StoredDerivedImage:
     try:
-        mime_type, extension, width, height = inspect_supported_image(output_bytes)
+        # Raw MPO is rejected at the provider-output boundary before the shared
+        # canonicalizer gets a chance to select its primary frame.
+        inspect_supported_image(output_bytes)
+        stored_bytes = normalize_image_for_processing(output_bytes)
+        mime_type, extension, width, height = inspect_supported_image(stored_bytes)
     except PhotoIntakeError:
         raise DerivedImageStorageError(
             "provider output is corrupt or uses an unsupported image format"
         ) from None
-    checksum = hashlib.sha256(output_bytes).hexdigest()
+    checksum = hashlib.sha256(stored_bytes).hexdigest()
     processed_root = processed_dir.resolve()
     originals_root = DEFAULT_ORIGINALS_DIR.resolve()
     if processed_root == originals_root or originals_root in processed_root.parents:
@@ -264,7 +271,7 @@ def store_processed_image(
         temporary_path = Path(temporary_name)
         try:
             with os.fdopen(file_descriptor, "wb") as temporary_file:
-                temporary_file.write(output_bytes)
+                temporary_file.write(stored_bytes)
                 temporary_file.flush()
                 os.fsync(temporary_file.fileno())
             os.replace(temporary_path, destination)
@@ -278,7 +285,7 @@ def store_processed_image(
         file_path=str(destination),
         checksum_sha256=checksum,
         mime_type=mime_type,
-        file_size_bytes=len(output_bytes),
+        file_size_bytes=len(stored_bytes),
         width=width,
         height=height,
     )
