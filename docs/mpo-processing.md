@@ -66,17 +66,25 @@ asset. The renderer only verifies and embeds the frozen JPEG/PNG/WebP; it never
 interprets EXIF, decodes MPO or resolves live Photo rows. Historical Snapshot,
 Build and PDF payloads are not rewritten or re-rendered.
 
-The 12-photo/20-MB Intake limits remain. Validation checks actual decoded format,
-container bounds and all MPO frames sequentially, with Pillow decompression-bomb
-protections. True MPO remains strict. When Pillow identifies a broken/stale MPF
-index as a baseline JPEG, the JPEG is accepted only after both `verify()` and a
-fresh full pixel `load()` succeed; it is then re-encoded to remove stale MPF and
-canonicalize orientation. Corrupt or truncated data still fails. Decode logs
-record the stage, detected format and exception type without paths or secrets.
-Processing/output validation still rejects raw MPO and all previously
-unsupported formats. Invalid uploads fail before creating a Photo or normalized
-files. Existing storage semantics still allow recoverable immutable files after
-a later DB failure; do not delete shared content-addressed assets automatically.
+The 12-photo/20-MB Intake limits remain. Validation first proves the actual MPO
+primary at offset 0 by fully loading its pixels with Pillow decompression-bomb
+and decoded-pixel protections. That decoded primary is authoritative for
+application usability. MPF entries are then inspected without allocating from
+their declared sizes. Stale primary Size metadata and auxiliary offsets or sizes
+that extend beyond EOF are logged and ignored; no seek is attempted for such an
+auxiliary. Decodable auxiliaries retain the same pixel safety check, while an
+in-bounds auxiliary whose JPEG payload does not decode is also logged and
+ignored because no application semantic consumes it. Invalid primary pixels,
+oversized primary pixels, corrupt ordinary images and primary-truncated files
+still fail. When Pillow identifies a broken/stale MPF index as a baseline JPEG,
+the JPEG is accepted only after both `verify()` and a fresh full pixel `load()`
+succeed; it is then re-encoded to remove stale MPF and canonicalize orientation.
+Decode logs record only the stage, detected format, frame number and exception
+type, without paths or secrets. Processing/output validation still rejects raw
+MPO and all previously unsupported formats. Invalid uploads fail before creating
+a Photo or normalized files. Existing storage semantics still allow recoverable
+immutable files after a later DB failure; do not delete shared content-addressed
+assets automatically.
 
 Migration `20261005_0028` follows head `20261004_0027`. It replaces only the Photo
 MIME CHECK, permitting `image/mpo` only when `is_original = 1`. Alembic batch
@@ -106,3 +114,7 @@ them. No extra dependency or codec is installed.
    OpenAI calls. Do not promote if doing so would duplicate an existing Product.
 6. Confirm previous Catalog Builds/PDFs remain unchanged. Normalization has no
    historical rewrite or automatic re-render operation.
+7. Upload `IMG_0258.JPEG` and `IMG_0257.JPEG` together. Each should remain one
+   `image/mpo` source Photo with its exact original filename and bytes. Their
+   malformed unused frame 1 must not show a decode error; preview, extraction
+   and enhancement must use the Orientation=3-canonicalized frame 0.

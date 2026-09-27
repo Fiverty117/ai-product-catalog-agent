@@ -114,6 +114,59 @@ def asymmetric_mpo(*, orientation=6):
     return out.getvalue()
 
 
+def mpo_with_invalid_auxiliary(*, orientation=None, asymmetric=False):
+    source = (
+        asymmetric_mpo(orientation=orientation)
+        if asymmetric
+        else mpo(orientation=orientation)
+    )
+    corrupted = bytearray(source)
+    with Image.open(BytesIO(source)) as image:
+        assert image.format == "MPO" and image.n_frames == 2
+        image.seek(1)
+        auxiliary_offset = image.offset
+    corrupted[auxiliary_offset : auxiliary_offset + 4] = b"BAD!"
+    return bytes(corrupted)
+
+
+def mpo_with_invalid_primary():
+    source = mpo()
+    corrupted = bytearray(source)
+    with Image.open(BytesIO(source)) as image:
+        primary_size = image.mpinfo[0xB002][0]["Size"]
+    end_marker = source.rfind(b"\xff\xd9", 0, primary_size)
+    assert end_marker > 0
+    corrupted[end_marker : end_marker + 2] = b"ZZ"
+    return bytes(corrupted)
+
+
+def mpo_with_stale_mpf_metadata():
+    source = asymmetric_mpo(orientation=3)
+    rewritten = bytearray(source)
+    with Image.open(BytesIO(source)) as image:
+        entries = image.mpinfo[0xB002]
+    mpf_base = source.index(b"MPF\0") + 4
+    byte_order = {b"II": "little", b"MM": "big"}[source[mpf_base : mpf_base + 2]]
+    replacements = (
+        (len(source) + 2520, 0),
+        (83424, len(source) - 16 - mpf_base),
+    )
+    for entry, (new_size, new_data_offset) in zip(
+        entries,
+        replacements,
+        strict=True,
+    ):
+        current_fields = entry["Size"].to_bytes(4, byte_order) + entry[
+            "DataOffset"
+        ].to_bytes(4, byte_order)
+        position = bytes(rewritten).find(current_fields, mpf_base)
+        assert position >= mpf_base
+        rewritten[position : position + 8] = new_size.to_bytes(
+            4, byte_order
+        ) + new_data_offset.to_bytes(4, byte_order)
+    return bytes(rewritten)
+
+
 def malformed_mpf_jpeg(kind):
     source = asymmetric_mpo()
     if kind == "malformed_index":
@@ -173,6 +226,25 @@ def assert_upright_image(content, image_format):
     assert max(abs(actual - expected) for actual, expected in zip(actual_bottom, (0, 0, 255))) < 30
 
 
+def assert_orientation_3_jpeg(content):
+    with Image.open(BytesIO(content)) as image:
+        assert image.format == "JPEG"
+        image.load()
+        assert image.size == (40, 24)
+        assert image.getexif().get(274, 1) == 1
+        assert "mp" not in image.info
+        actual_left = image.getpixel((8, 12))
+        actual_right = image.getpixel((32, 12))
+    assert max(
+        abs(actual - expected)
+        for actual, expected in zip(actual_left, (0, 0, 255))
+    ) < 30
+    assert max(
+        abs(actual - expected)
+        for actual, expected in zip(actual_right, (255, 0, 0))
+    ) < 30
+
+
 def test_upload_truth_primary_exif_preview_and_idempotency(store, monkeypatch):
     client, factory, originals = store
     source = mpo(orientation=6)
@@ -210,6 +282,141 @@ def test_upload_truth_primary_exif_preview_and_idempotency(store, monkeypatch):
     assert len(list(normalized.rglob("*.jpg"))) == 1
     assert len(list(normalized.rglob("*.json"))) == 1
     assert PROCESSING_VERSION in str(next(normalized.rglob("*.json")))
+
+
+def test_valid_primary_with_invalid_auxiliary_is_accepted_and_oriented(
+    store,
+    monkeypatch,
+):
+    client, factory, originals = store
+    diagnostics = []
+
+    def capture_diagnostic(message, *args):
+        diagnostics.append(message % args)
+
+    monkeypatch.setattr(
+        "app.services.image_processing.logger.warning",
+        capture_diagnostic,
+    )
+    source = mpo_with_invalid_auxiliary(orientation=3, asymmetric=True)
+    source_checksum = hashlib.sha256(source).hexdigest()
+    with Image.open(BytesIO(source)) as image:
+        assert image.format == "MPO" and image.n_frames == 2
+        assert image.tell() == 0 and image.getexif().get(274) == 3
+        image.load()
+        with pytest.raises(SyntaxError, match="not a JPEG file"):
+            image.seek(1)
+
+    created = upload(client, source, filename="IMG_0258.JPEG")
+
+    assert created.status_code == 201, created.text
+    item = created.json()
+    assert len(item["photos"]) == 1
+    assert item["photos"][0]["original_filename"] == "IMG_0258.JPEG"
+    assert item["photos"][0]["mime_type"] == "image/mpo"
+    preview = client.get(item["photos"][0]["image_url"])
+    assert preview.status_code == 200
+    assert_orientation_3_jpeg(preview.content)
+    assert any(
+        "MPO auxiliary frame decode failed frame=1" in message
+        and "using valid primary frame 0" in message
+        for message in diagnostics
+    )
+
+    with factory() as session:
+        photos = session.scalars(select(Photo)).all()
+        assert len(photos) == 1
+        photo = photos[0]
+        assert photo.mime_type == "image/mpo"
+        assert photo.checksum_sha256 == source_checksum
+        assert Path(photo.file_path).read_bytes() == source
+        processing = resolve_photo_for_processing(photo)
+        assert processing.mime_type == "image/jpeg"
+        assert processing.file_path.read_bytes() == preview.content
+        assert processing.checksum_sha256 == hashlib.sha256(
+            preview.content
+        ).hexdigest()
+        assert (processing.width, processing.height) == (40, 24)
+    assert len(list(originals.rglob("*.mpo"))) == 1
+    assert len(list((originals.parent / "normalized").rglob("*.jpg"))) == 1
+
+
+def test_invalid_primary_mpo_is_rejected_without_persisted_state(store):
+    client, factory, originals = store
+    source = mpo_with_invalid_primary()
+    with Image.open(BytesIO(source)) as image:
+        assert image.format == "MPO" and image.n_frames == 2
+        with pytest.raises(OSError, match="broken data stream"):
+            image.load()
+
+    response = upload(client, source, filename="BAD_PRIMARY.JPEG")
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "uploaded file is not a decodable image"
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(Photo)) == 0
+        assert session.scalar(select(func.count()).select_from(ProductIntakeItem)) == 0
+    assert not originals.exists()
+    assert not (originals.parent / "normalized").exists()
+    assert_no_canonical(factory)
+
+
+def test_stale_primary_size_and_out_of_bounds_auxiliary_are_recovered(
+    store,
+    monkeypatch,
+):
+    client, factory, originals = store
+    diagnostics = []
+
+    def capture_diagnostic(message, *args):
+        diagnostics.append(message % args)
+
+    monkeypatch.setattr(
+        "app.services.image_processing.logger.warning",
+        capture_diagnostic,
+    )
+    source = mpo_with_stale_mpf_metadata()
+    source_checksum = hashlib.sha256(source).hexdigest()
+    with Image.open(BytesIO(source)) as image:
+        assert image.format == "MPO" and image.n_frames == 2
+        entries = image.mpinfo[0xB002]
+        offsets = getattr(image, "_MpoImageFile__mpoffsets")
+        assert entries[0]["Size"] > len(source)
+        assert offsets[1] + entries[1]["Size"] > len(source)
+        assert image.tell() == 0 and image.getexif().get(274) == 3
+        image.load()
+        with pytest.raises(SyntaxError, match="not a JPEG file"):
+            image.seek(1)
+
+    created = upload(client, source, filename="IMG_0257.JPEG")
+
+    assert created.status_code == 201, created.text
+    item = created.json()
+    assert len(item["photos"]) == 1
+    assert item["photos"][0]["original_filename"] == "IMG_0257.JPEG"
+    assert item["photos"][0]["mime_type"] == "image/mpo"
+    preview = client.get(item["photos"][0]["image_url"])
+    assert preview.status_code == 200
+    assert_orientation_3_jpeg(preview.content)
+    assert any(
+        "malformed MPO/MPF metadata ignored frame=0" in message
+        for message in diagnostics
+    )
+    assert any(
+        "malformed MPO/MPF metadata ignored frame=1" in message
+        for message in diagnostics
+    )
+
+    with factory() as session:
+        photo = session.scalar(select(Photo))
+        assert photo.mime_type == "image/mpo"
+        assert photo.checksum_sha256 == source_checksum
+        assert Path(photo.file_path).read_bytes() == source
+        processing = resolve_photo_for_processing(photo)
+        assert processing.mime_type == "image/jpeg"
+        assert processing.file_path.read_bytes() == preview.content
+    assert len(list(originals.rglob("*.mpo"))) == 1
+    assert len(list((originals.parent / "normalized").rglob("*.jpg"))) == 1
 
 
 @pytest.mark.parametrize(
@@ -521,13 +728,11 @@ def test_decodable_jpeg_with_stale_mpf_metadata_is_safely_normalized(store, kind
     assert len(list((originals.parent / "normalized").rglob("*.jpg"))) == 1
 
 
-@pytest.mark.parametrize("failure", ["truncated_frame", "corrupt_jpeg", "unsupported"])
+@pytest.mark.parametrize("failure", ["corrupt_jpeg", "unsupported"])
 def test_bad_sources_fail_without_rows_or_normalized_orphans(store, failure):
     client, factory, originals = store
     source = mpo()
-    if failure == "truncated_frame":
-        source = source[:-40]
-    elif failure == "corrupt_jpeg":
+    if failure == "corrupt_jpeg":
         source = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
     else:
         out = BytesIO()
@@ -541,6 +746,23 @@ def test_bad_sources_fail_without_rows_or_normalized_orphans(store, failure):
     assert not originals.exists()
     assert not (originals.parent / "normalized").exists()
     assert_no_canonical(factory)
+
+
+def test_truncated_auxiliary_region_is_ignored_when_primary_fully_decodes(store):
+    client, factory, _ = store
+    source = mpo()[:-40]
+    with Image.open(BytesIO(source)) as image:
+        assert image.format == "MPO" and image.n_frames == 2
+        image.load()
+
+    response = upload(client, source, filename="TRUNCATED_AUX.JPEG")
+
+    assert response.status_code == 201, response.text
+    with factory() as session:
+        photo = session.scalar(select(Photo))
+        assert photo.mime_type == "image/mpo"
+        assert photo.checksum_sha256 == hashlib.sha256(source).hexdigest()
+        assert Path(photo.file_path).read_bytes() == source
 
 
 def test_mpo_preserves_pixel_safety_and_processing_boundary(monkeypatch):
@@ -720,17 +942,21 @@ def test_exif_oriented_jpeg_uses_one_canonical_asset_end_to_end(store):
 
 def test_mpo_extraction_promotion_enhancement_and_frozen_catalog(store):
     client, factory, originals = store
-    source = mpo()
-    item = upload(client, source).json()
+    source = mpo_with_stale_mpf_metadata()
+    created = upload(client, source)
+    assert created.status_code == 201, created.text
+    item = created.json()
     photo_id = uuid.UUID(item["photos"][0]["id"])
+    preview = client.get(item["photos"][0]["image_url"])
+    assert preview.status_code == 200
+    assert_orientation_3_jpeg(preview.content)
 
     class Vision:
         name = "openai"
         def extract(self, request):
             assert len(request.images) == 1
             assert request.images[0].mime_type == "image/jpeg"
-            assert request.images[0].content != source
-            assert_jpeg(request.images[0].content)
+            assert request.images[0].content == preview.content
             return VisionExtractionResponse(ProductExtractionResult.model_validate({
                 "brand_name": observation("Phone Brand"), "product_name": observation("Phone Product"),
                 "flavor": observation("Plain"), "size_value": observation("1"),
@@ -774,7 +1000,7 @@ def test_mpo_extraction_promotion_enhancement_and_frozen_catalog(store):
         view = build_catalog_render_view_model(data, config, storage_root=originals.parent)
         uri = view.sections[0].products[0].image_data_uri
         assert uri.startswith("data:image/jpeg;base64,")
-        assert_jpeg(base64.b64decode(uri.split(",", 1)[1]))
+        assert_orientation_3_jpeg(base64.b64decode(uri.split(",", 1)[1]))
         html = render_catalog_html(view, resolve_catalog_template(config.template_key))
         assert len(PdfReader(BytesIO(ChromiumCatalogPdfRenderer().render(html, config).pdf_bytes)).pages) >= 1
         assert snapshot.payload == old_payload and snapshot.content_hash == old_hash
@@ -782,14 +1008,17 @@ def test_mpo_extraction_promotion_enhancement_and_frozen_catalog(store):
         assert job.payload["source_checksum_sha256"] == photos[0].checksum_sha256
         session.commit()
 
-    assert_jpeg(client.get(summary.original_preview_url).content)
-    assert_jpeg(client.get(f"/api/catalog-builder/products/{product_id}/image").content)
+    assert client.get(summary.original_preview_url).content == preview.content
+    assert (
+        client.get(f"/api/catalog-builder/products/{product_id}/image").content
+        == preview.content
+    )
 
     class Enhancement:
         name = "openai"
         def enhance(self, request):
             assert request.source.mime_type == "image/jpeg"
-            assert_jpeg(request.source.content)
+            assert request.source.content == preview.content
             out = BytesIO()
             Image.new("RGB", (18, 12), "green").save(out, format="PNG")
             return ImageEnhancementResult(out.getvalue(), "png", {})

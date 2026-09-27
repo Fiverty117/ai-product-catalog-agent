@@ -44,6 +44,19 @@ ORIENTATION_TRANSPOSE = {
     7: Image.Transpose.TRANSVERSE,
     8: Image.Transpose.ROTATE_90,
 }
+_MPO_AUXILIARY_DECODE_ERRORS = (
+    UnidentifiedImageError,
+    OSError,
+    SyntaxError,
+    ValueError,
+    EOFError,
+    IndexError,
+    KeyError,
+    TypeError,
+    OverflowError,
+    RuntimeError,
+    struct.error,
+)
 
 
 class PhotoIntakeError(ValueError):
@@ -103,23 +116,40 @@ def _inspect_image_details(content: bytes, *, allow_mpo: bool) -> _ImageInspecti
             legacy_processing_compatible = True
             with Image.open(BytesIO(content)) as image:
                 if detected_format == "MPO":
-                    # Validate the container and each frame, without keeping decoded copies.
-                    entries = image.mpinfo[0xB002]
-                    if not entries:
-                        raise ValueError("MPO has no frames")
-                    for index, entry in enumerate(entries):
-                        image.seek(index)
-                        # Image.open checks frame 0; MPO.seek does not repeat that check.
-                        if Image.MAX_IMAGE_PIXELS is not None and image.width * image.height > Image.MAX_IMAGE_PIXELS:
-                            raise ValueError("MPO frame exceeds decoded pixel safety limit")
-                        offset = image.offset
-                        if entry["Size"] < 4 or offset < 0 or offset + entry["Size"] > len(content):
-                            raise ValueError("invalid MPO frame bounds")
-                        image.load()
-                        if index == 0:
-                            orientation, malformed_orientation, legacy_processing_compatible = (
-                                _read_exif_orientation(image)
-                            )
+                    image.seek(0)
+                    if image.tell() != 0 or image.offset != 0:
+                        raise ValueError("invalid MPO primary frame identity")
+                    _validate_mpo_frame_pixels(image)
+                    image.load()
+                    orientation, malformed_orientation, legacy_processing_compatible = (
+                        _read_exif_orientation(image)
+                    )
+                    for index, expected_offset in _mpo_auxiliary_frames_to_decode(
+                        image,
+                        content_length=len(content),
+                    ):
+                        try:
+                            image.seek(index)
+                        except (
+                            Image.DecompressionBombError,
+                            Image.DecompressionBombWarning,
+                        ):
+                            raise
+                        except _MPO_AUXILIARY_DECODE_ERRORS as exc:
+                            _log_invalid_mpo_auxiliary(index, exc)
+                            continue
+                        if image.offset != expected_offset:
+                            raise ValueError("MPO frame offset changed during decode")
+                        _validate_mpo_frame_pixels(image)
+                        try:
+                            image.load()
+                        except (
+                            Image.DecompressionBombError,
+                            Image.DecompressionBombWarning,
+                        ):
+                            raise
+                        except _MPO_AUXILIARY_DECODE_ERRORS as exc:
+                            _log_invalid_mpo_auxiliary(index, exc)
                 else:
                     image.load()
                     (
@@ -136,7 +166,7 @@ def _inspect_image_details(content: bytes, *, allow_mpo: bool) -> _ImageInspecti
             )
     except (Image.DecompressionBombError, Image.DecompressionBombWarning,
             UnidentifiedImageError, OSError, SyntaxError, ValueError,
-            IndexError, KeyError, TypeError, OverflowError, RuntimeError,
+            EOFError, IndexError, KeyError, TypeError, OverflowError, RuntimeError,
             struct.error, UserWarning) as exc:
         logger.warning(
             "image decode failed stage=%s detected_format=%s detected_mime=%s exception_type=%s",
@@ -166,6 +196,102 @@ def _inspect_image_details(content: bytes, *, allow_mpo: bool) -> _ImageInspecti
             or orientation != 1
         ),
         legacy_processing_compatible=legacy_processing_compatible,
+    )
+
+
+def _mpo_auxiliary_frames_to_decode(
+    image: Image.Image,
+    *,
+    content_length: int,
+) -> tuple[tuple[int, int], ...]:
+    try:
+        entries = image.mpinfo[0xB002]
+        frame_count = image.n_frames
+        # Pillow derives these offsets from the MPF index while opening the
+        # already decoded primary JPEG. If they are unavailable, auxiliary
+        # content is unusable but the primary remains authoritative.
+        offsets = getattr(image, "_MpoImageFile__mpoffsets", None)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+        _log_malformed_mpf_metadata()
+        return ()
+    if (
+        not isinstance(entries, list)
+        or not entries
+        or type(frame_count) is not int
+        or frame_count != len(entries)
+        or not isinstance(offsets, (list, tuple))
+        or len(offsets) != frame_count
+    ):
+        _log_malformed_mpf_metadata()
+        return ()
+    if not _mpo_entry_has_usable_bounds(
+        entries[0],
+        offsets[0],
+        content_length=content_length,
+    ):
+        _log_malformed_mpf_metadata(frame=0)
+    usable = []
+    for index in range(1, frame_count):
+        if not _mpo_entry_has_usable_bounds(
+            entries[index],
+            offsets[index],
+            content_length=content_length,
+        ):
+            _log_malformed_mpf_metadata(frame=index)
+            continue
+        usable.append((index, offsets[index]))
+    return tuple(usable)
+
+
+def _mpo_entry_has_usable_bounds(
+    entry: object,
+    offset: object,
+    *,
+    content_length: int,
+) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    size = entry.get("Size")
+    data_offset = entry.get("DataOffset")
+    attribute = entry.get("Attribute")
+    return (
+        type(size) is int
+        and type(data_offset) is int
+        and type(offset) is int
+        and size >= 4
+        and data_offset >= 0
+        and offset >= 0
+        and offset < content_length
+        and offset + size <= content_length
+        and isinstance(attribute, dict)
+        and attribute.get("ImageDataFormat") == "JPEG"
+    )
+
+
+def _validate_mpo_frame_pixels(image: Image.Image) -> None:
+    if image.width <= 0 or image.height <= 0:
+        raise ValueError("invalid MPO frame dimensions")
+    if (
+        Image.MAX_IMAGE_PIXELS is not None
+        and image.width * image.height > Image.MAX_IMAGE_PIXELS
+    ):
+        raise ValueError("MPO frame exceeds decoded pixel safety limit")
+
+
+def _log_invalid_mpo_auxiliary(index: int, error: Exception) -> None:
+    logger.warning(
+        "MPO auxiliary frame decode failed frame=%s exception_type=%s; "
+        "using valid primary frame 0",
+        index,
+        type(error).__name__,
+    )
+
+
+def _log_malformed_mpf_metadata(*, frame: int | None = None) -> None:
+    logger.warning(
+        "malformed MPO/MPF metadata ignored frame=%s; "
+        "using fully decodable primary frame 0",
+        frame if frame is not None else "unknown",
     )
 
 
