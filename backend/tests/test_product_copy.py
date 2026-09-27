@@ -274,7 +274,7 @@ def test_new_editorial_policy_does_not_change_old_proposal_or_review(
 
     new_job = enqueue_product_copy(session, product_id=product.id)
 
-    assert new_job.payload["prompt_version"] == "product-copy-v3"
+    assert new_job.payload["prompt_version"] == "product-copy-v4"
     assert (
         old_run.generated_text, old_run.status, old_run.started_at,
         old_run.completed_at, old_run.usage, old_run.input_snapshot,
@@ -290,6 +290,60 @@ def test_new_editorial_policy_does_not_change_old_proposal_or_review(
         assert resolved.short_description == "Resumen antiguo de SKU."
     else:
         assert resolved.state is ProductCopyResolutionState.NONE
+
+
+def test_v4_enqueue_does_not_rewrite_v1_v2_v3_proposals(
+    session: Session,
+) -> None:
+    product, *_ = make_context(session)
+    historical_runs = []
+    for index, prompt_version in enumerate(
+        ("product-copy-v1", "product-copy-v2", "product-copy-v3"),
+        start=1,
+    ):
+        run = create_running_product_copy_run(
+            session,
+            payload=make_payload(
+                session,
+                product,
+                prompt_version=prompt_version,
+            ),
+            started_at=NOW + timedelta(minutes=index),
+        )
+        historical_runs.append(
+            mark_product_copy_run_succeeded(
+                session,
+                run,
+                structured_result={
+                    "short_description": f"Propuesta histórica v{index}."
+                },
+                completed_at=NOW + timedelta(minutes=index),
+            )
+        )
+    before = [
+        (
+            run.id,
+            run.prompt_version,
+            run.generated_text,
+            run.input_snapshot.copy(),
+            run.completed_at,
+        )
+        for run in historical_runs
+    ]
+
+    new_job = enqueue_product_copy(session, product_id=product.id)
+
+    assert new_job.payload["prompt_version"] == "product-copy-v4"
+    assert [
+        (
+            run.id,
+            run.prompt_version,
+            run.generated_text,
+            run.input_snapshot,
+            run.completed_at,
+        )
+        for run in historical_runs
+    ] == before
 
 
 def test_run_lifecycle_is_audited_terminal_and_does_not_modify_product(

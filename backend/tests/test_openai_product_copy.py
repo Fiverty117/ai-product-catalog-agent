@@ -19,7 +19,11 @@ from app.ai.prompts.product_copy_v2 import (
     PRODUCT_COPY_PROMPT as PRODUCT_COPY_PROMPT_V2,
     PROMPT_VERSION as PROMPT_VERSION_V2,
 )
-from app.ai.prompts.product_copy_v3 import PRODUCT_COPY_PROMPT, PROMPT_VERSION
+from app.ai.prompts.product_copy_v3 import (
+    PRODUCT_COPY_PROMPT as PRODUCT_COPY_PROMPT_V3,
+    PROMPT_VERSION as PROMPT_VERSION_V3,
+)
+from app.ai.prompts.product_copy_v4 import PRODUCT_COPY_PROMPT, PROMPT_VERSION
 from app.domain.schemas import ProductCopyInputSnapshot, ProductCopyResult
 
 
@@ -44,6 +48,7 @@ def client(response=None, error=None):
 PROMPTS = {
     PROMPT_VERSION_V1: PRODUCT_COPY_PROMPT_V1,
     PROMPT_VERSION_V2: PRODUCT_COPY_PROMPT_V2,
+    PROMPT_VERSION_V3: PRODUCT_COPY_PROMPT_V3,
     PROMPT_VERSION: PRODUCT_COPY_PROMPT,
 }
 
@@ -109,7 +114,7 @@ def test_prompt_and_openai_request_are_grounded_structured_and_private() -> None
     returned = OpenAIProductCopyProvider(fake_client).generate(request())
 
     call = responses.calls[0]
-    assert PROMPT_VERSION == "product-copy-v3"
+    assert PROMPT_VERSION == "product-copy-v4"
     prompt = " ".join(PRODUCT_COPY_PROMPT.casefold().split())
     for required in (
         "canonical product",
@@ -117,6 +122,12 @@ def test_prompt_and_openai_request_are_grounded_structured_and_private() -> None
         "common uses",
         "generally associated benefits",
         "approved claim record",
+        "exact product identity",
+        "subtype or form",
+        "neighboring products",
+        "why a customer might choose",
+        "could be reused almost unchanged",
+        "product identity, then subtype or form, then category",
         "evergreen",
         "medical",
         "strength",
@@ -196,7 +207,7 @@ def test_collagen_prompt_allows_general_benefits_without_internal_claims() -> No
     assert "established general knowledge" in prompt
     assert "common uses" in prompt
     assert "generally associated benefits" in prompt
-    assert "even when no internal product fact or approved claim record" in prompt
+    assert "does not require an internal product fact or approved claim record" in prompt
     for forbidden_invention in (
         "dosage",
         "concentration",
@@ -243,9 +254,142 @@ def test_creatine_prompt_allows_sports_context_without_specific_claims() -> None
 def test_medical_boundary_preserves_general_wellness_and_sports_benefits() -> None:
     prompt = " ".join(PRODUCT_COPY_PROMPT.casefold().split())
     assert "do not make disease-treatment or disease-prevention claims" in prompt
-    assert "does not prohibit normal general wellness" in prompt
+    assert "does not prohibit normal commercial wellness" in prompt
     assert "nutrition or sports benefits" in prompt
-    assert "normal nutritional, wellness" in prompt
+    for allowed_context in (
+        "relaxation/rest",
+        "cognition/focus",
+        "digestion/fiber",
+        "skin/joint",
+        "energy-metabolism",
+        "strength-training",
+    ):
+        assert allowed_context in prompt
+
+
+def test_glycinate_policy_requires_form_specific_commercial_reasoning() -> None:
+    fake_client, responses = client(
+        SimpleNamespace(
+            status="completed",
+            output=[],
+            output_parsed={"short_description": "Descripción comercial."},
+        )
+    )
+
+    OpenAIProductCopyProvider(fake_client).generate(
+        request(
+            product_name="MAGNESIUM GLYCINATE",
+            category_name="Magnesium / Supplements",
+        )
+    )
+
+    prompt = " ".join(responses.calls[0]["instructions"].casefold().split())
+    serialized_input = str(responses.calls[0]["input"]).casefold()
+    assert "magnesium glycinate" in serialized_input
+    assert "exact product identity before its broad category" in prompt
+    assert "glycine-bound identity" in prompt
+    assert "tolerance and relaxation/rest positioning" in prompt
+    assert "why a customer might choose this version" in prompt
+    assert "could be reused almost unchanged" in prompt
+
+
+def test_l_threonate_trademark_boundary_depends_on_supplied_identity() -> None:
+    calls = []
+    for product_name in (
+        "MAGNESIUM L-THREONATE",
+        "Magtein Magnesium L-Threonate",
+    ):
+        fake_client, responses = client(
+            SimpleNamespace(
+                status="completed",
+                output=[],
+                output_parsed={"short_description": "Descripción comercial."},
+            )
+        )
+        OpenAIProductCopyProvider(fake_client).generate(
+            request(product_name=product_name, category_name="Magnesium")
+        )
+        calls.append(responses.calls[0])
+
+    generic_input = str(calls[0]["input"]).casefold()
+    named_input = str(calls[1]["input"]).casefold()
+    prompt = " ".join(calls[0]["instructions"].casefold().split())
+    assert "magtein" not in generic_input
+    assert "magtein magnesium l-threonate" in named_input
+    assert "l-threonic acid" in prompt
+    assert "nervous-system, cognitive, memory or focus context" in prompt
+    assert "do not infer magtein from generic magnesium l-threonate" in prompt
+    assert "may be acknowledged only as that supplied identity" in prompt
+    assert "do not invent patented status" in prompt
+
+
+def test_three_magnesium_forms_share_category_but_not_semantic_template() -> None:
+    product_names = (
+        "MAGNESIUM GLYCINATE",
+        "MAGNESIUM L-THREONATE",
+        "MAGNESIUM CITRATE",
+    )
+    serialized_inputs = []
+    prompts = []
+    for product_name in product_names:
+        fake_client, responses = client(
+            SimpleNamespace(
+                status="completed",
+                output=[],
+                output_parsed={"short_description": "Descripción comercial."},
+            )
+        )
+        OpenAIProductCopyProvider(fake_client).generate(
+            request(product_name=product_name, category_name="Magnesium")
+        )
+        serialized_inputs.append(str(responses.calls[0]["input"]).casefold())
+        prompts.append(
+            " ".join(responses.calls[0]["instructions"].casefold().split())
+        )
+
+    assert all(
+        name.casefold() in serialized
+        for name, serialized in zip(product_names, serialized_inputs, strict=True)
+    )
+    assert len(set(prompts)) == 1
+    prompt = prompts[0]
+    for form_specific_direction in (
+        "glycine-bound identity",
+        "l-threonic acid",
+        "citric-acid identity, solubility and common digestive context",
+    ):
+        assert form_specific_direction in prompt
+    assert "do not reduce these forms to the same generic magnesium-intake" in prompt
+
+
+def test_identity_first_policy_generalizes_beyond_magnesium() -> None:
+    serialized_inputs = []
+    for product_name in ("WHEY ISOLATE", "WHEY CONCENTRATE"):
+        fake_client, responses = client(
+            SimpleNamespace(
+                status="completed",
+                output=[],
+                output_parsed={"short_description": "Descripción comercial."},
+            )
+        )
+        OpenAIProductCopyProvider(fake_client).generate(
+            request(product_name=product_name, category_name="Proteínas")
+        )
+        serialized_inputs.append(str(responses.calls[0]["input"]).casefold())
+
+    prompt = " ".join(PRODUCT_COPY_PROMPT.casefold().split())
+    assert "whey isolate" in serialized_inputs[0]
+    assert "whey concentrate" in serialized_inputs[1]
+    assert "apply the same identity-first method in every domain" in prompt
+    assert "distinguish whey isolate from whey concentrate" in prompt
+    assert "hydrolyzed collagen or peptides from type ii collagen" in prompt
+
+
+def test_generic_product_names_do_not_authorize_proprietary_names() -> None:
+    prompt = " ".join(PRODUCT_COPY_PROMPT.casefold().split())
+    assert "never introduce a trademark or proprietary identity absent" in prompt
+    assert "do not infer magtein from generic magnesium l-threonate" in prompt
+    assert "creapure from generic creatine" in prompt
 
 
 def test_v1_queued_request_keeps_its_original_context() -> None:
@@ -270,6 +414,24 @@ def test_v2_queued_request_keeps_product_level_context() -> None:
         request(prompt_version=PROMPT_VERSION_V2)
     )
     serialized_input = str(responses.calls[0]["input"]).casefold()
+    assert "vegan protein" in serialized_input
+    assert "chocolate" not in serialized_input
+
+
+def test_v3_queued_request_keeps_product_level_context() -> None:
+    fake_client, responses = client(
+        SimpleNamespace(
+            status="completed",
+            output=[],
+            output_parsed={"short_description": "Descripción anterior."},
+        )
+    )
+    OpenAIProductCopyProvider(fake_client).generate(
+        request(prompt_version=PROMPT_VERSION_V3)
+    )
+    call = responses.calls[0]
+    serialized_input = str(call["input"]).casefold()
+    assert call["instructions"] == PRODUCT_COPY_PROMPT_V3
     assert "vegan protein" in serialized_input
     assert "chocolate" not in serialized_input
 

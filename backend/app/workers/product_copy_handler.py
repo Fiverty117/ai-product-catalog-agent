@@ -22,6 +22,10 @@ from app.ai.prompts.product_copy_v3 import (
     PRODUCT_COPY_PROMPT as PRODUCT_COPY_PROMPT_V3,
     PROMPT_VERSION as PROMPT_VERSION_V3,
 )
+from app.ai.prompts.product_copy_v4 import (
+    PRODUCT_COPY_PROMPT as PRODUCT_COPY_PROMPT_V4,
+    PROMPT_VERSION as PROMPT_VERSION_V4,
+)
 from app.db.models import ProductCopyRun
 from app.domain.schemas import ProductCopyJobPayload, ProductCopyResult
 from app.services.jobs import PermanentJobError
@@ -40,6 +44,7 @@ PRODUCT_COPY_PROMPTS = {
     PROMPT_VERSION_V1: PRODUCT_COPY_PROMPT_V1,
     PROMPT_VERSION_V2: PRODUCT_COPY_PROMPT_V2,
     PROMPT_VERSION_V3: PRODUCT_COPY_PROMPT_V3,
+    PROMPT_VERSION_V4: PRODUCT_COPY_PROMPT_V4,
 }
 
 
